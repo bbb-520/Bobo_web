@@ -22,6 +22,9 @@ export const EVENT = {
   SESSION_INFO: 1010,
   /** 图片后台任务：eventData 为 ImageJobEventData */
   IMAGE_JOB: 1011,
+  SCENE_CARD: 1012,
+  WAITING_FOR_INSTRUCTION: 1013,
+  GENERATION_CREATED: 1014,
 } as const;
 
 /** SSE 中一条 `data:` 对应的原始结构：{"eventType":1001,"eventData":"..."} */
@@ -76,6 +79,15 @@ export interface ImageJobEventData {
   status: ImageJobStatus;
   mode?: string;
   createdAt?: string;
+}
+
+export interface SceneCardEventData {
+  summary: string;
+  subjects?: string[];
+  palette?: string;
+  composition?: string;
+  mood?: string;
+  sourceAssetId?: string;
 }
 
 export interface ImageJobRef {
@@ -138,6 +150,8 @@ export interface ChatMsg {
   attachments?: ImageAttachment[];
   /** 后台图片任务，仅保存任务 ID 和状态。 */
   imageJobs?: ImageJobRef[];
+  sceneCard?: SceneCardEventData;
+  waitingForInstruction?: boolean;
 }
 
 /** 一个会话 = 一个后端 sessionId（记忆上下文），加上本地持久化的消息列表 */

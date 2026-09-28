@@ -17,6 +17,22 @@ export interface KeyStatus {
   masked?: string | null;
 }
 
+export interface ModelProfile {
+  provider: string;
+  capability: string;
+  model: string;
+  enabled: boolean;
+  maskedApiKey?: string | null;
+}
+
+export function listModelProfiles(baseUrl: string): Promise<ModelProfile[]> {
+  return request<ModelProfile[]>(baseUrl, '/api/settings/models');
+}
+
+export function saveModelProfile(baseUrl: string, profile: { provider: string; capability: string; model: string; apiKey?: string }): Promise<ModelProfile> {
+  return request<ModelProfile>(baseUrl, '/api/settings/models', { method: 'PUT', body: JSON.stringify(profile) });
+}
+
 export function getMe(baseUrl: string): Promise<AuthUser> {
   return request<AuthUser>(baseUrl, '/api/auth/me');
 }

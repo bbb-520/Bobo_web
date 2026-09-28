@@ -7,6 +7,7 @@ import type {
   ImageAttachment,
   ImageJobEventData,
   ImageJobRef,
+  SceneCardEventData,
   SessionInfoData,
   Settings,
   ToolCallFailedData,
@@ -507,6 +508,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           }
           break;
         }
+        case EVENT.SCENE_CARD: {
+          const d = e.eventData as SceneCardEventData | null;
+          if (d && typeof d.summary === 'string') patchAsst((m) => ({ ...m, sceneCard: d }));
+          break;
+        }
+        case EVENT.WAITING_FOR_INSTRUCTION:
+          patchAsst((m) => ({ ...m, waitingForInstruction: true }));
+          break;
         case EVENT.STOP:
           sawStop = true;
           finish(stopRequested ? 'stopped' : 'done', {

@@ -7,7 +7,7 @@ import {
   patchBoboItem,
   type BoboMineItem,
 } from '../lib/api';
-import { deleteKey, getKeyStatus, saveKeys } from '../lib/auth';
+import { deleteKey, getKeyStatus, saveKeys, listModelProfiles, saveModelProfile, type ModelProfile } from '../lib/auth';
 import { IconClose } from './icons';
 
 const PAGE_SIZE = 24;
@@ -32,6 +32,11 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
   const [keyDraft, setKeyDraft] = useState('');
   const [keyMessage, setKeyMessage] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
+  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
+  const [modelProvider, setModelProvider] = useState('QWEN');
+  const [modelName, setModelName] = useState('qwen-plus');
+  const [modelKey, setModelKey] = useState('');
+  const [modelMessage, setModelMessage] = useState('');
 
   const load = useCallback(async (nextCursor: string | null = null, replace = true) => {
     if (!user) { setItems([]); setPublicCount(0); setLoading(false); return; }
@@ -72,6 +77,25 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
     if (!user) { setKeyStatus(null); return; }
     void getKeyStatus(baseUrl).then(setKeyStatus).catch(() => setKeyStatus(null));
   }, [baseUrl, user]);
+
+  useEffect(() => {
+    if (!user) { setModelProfiles([]); return; }
+    void listModelProfiles(baseUrl).then((rows) => {
+      setModelProfiles(rows);
+      const chat = rows.find((row) => row.capability === 'CHAT');
+      if (chat) { setModelProvider(chat.provider); setModelName(chat.model); }
+    }).catch(() => setModelProfiles([]));
+  }, [baseUrl, user]);
+
+  const saveSelectedModel = async () => {
+    setModelMessage('');
+    try {
+      const saved = await saveModelProfile(baseUrl, { provider: modelProvider, capability: 'CHAT', model: modelName, apiKey: modelKey || undefined });
+      setModelProfiles((rows) => [...rows.filter((row) => row.capability !== 'CHAT'), saved]);
+      setModelKey('');
+      setModelMessage('对话模型已保存');
+    } catch (cause) { setModelMessage(cause instanceof Error ? cause.message : '保存失败'); }
+  };
 
   const saveProviderKey = async () => {
     if (!keyDraft.trim()) { setKeyMessage('请输入阿里云 API Key'); return; }
@@ -166,6 +190,22 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
             <button type="button" className="btn-ghost" disabled={keyBusy} onClick={() => void saveProviderKey()}>{keyBusy ? '保存中…' : '保存 Key'}</button>
           </div>
           {keyMessage && <div className="check-line" role="status">{keyMessage}</div>}
+        </section>}
+
+        {user && <section className="profile-key-section" aria-label="对话模型选择">
+          <div className="set-sec-title">对话模型</div>
+          <p className="hint">可选择 GPT、Gemini、Qwen、GLM 或 HY；每个账号独立保存 Key。</p>
+          <div className="profile-key-form">
+            <select value={modelProvider} onChange={(event) => setModelProvider(event.target.value)}>
+              <option value="GPT">GPT</option><option value="GEMINI">Gemini</option><option value="QWEN">Qwen</option><option value="GLM">GLM</option><option value="HY">HY</option>
+            </select>
+            <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="模型名称" />
+          </div>
+          <div className="profile-key-form">
+            <input type="password" value={modelKey} onChange={(event) => setModelKey(event.target.value)} placeholder={modelProfiles.find((row) => row.capability === 'CHAT')?.maskedApiKey ?? '粘贴模型 API Key'} autoComplete="off" />
+            <button type="button" className="btn-ghost" onClick={() => void saveSelectedModel()}>保存模型</button>
+          </div>
+          {modelMessage && <div className="check-line" role="status">{modelMessage}</div>}
         </section>}
 
         {!user ? <div className="bobo-profile-state">登录后可以查看和管理你的作品。</div> : loading ?

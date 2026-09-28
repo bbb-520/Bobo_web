@@ -42,7 +42,7 @@ export default function Composer({ value, onChange, onSend, onStop, running }: P
 
   const submit = () => {
     if (running) return;
-    if (!file) return;
+    if (!file && !value.trim()) return;
     onChange('');
     requestAnimationFrame(() => taRef.current && (taRef.current.style.height = 'auto'));
     onSend(file ?? undefined);
@@ -115,7 +115,7 @@ export default function Composer({ value, onChange, onSend, onStop, running }: P
             <button
               className="send-btn"
               onClick={submit}
-              disabled={!file}
+              disabled={!file && !value.trim()}
               title="发送"
               aria-label="发送"
             >

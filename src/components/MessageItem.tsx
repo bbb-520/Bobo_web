@@ -52,6 +52,15 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
         ) : (
           <>
             {msg.content && <div className="bubble-plain"><Markdown content={msg.content} />{isStreaming && <span className="caret" />}</div>}
+            {msg.sceneCard && (
+              <div className="bubble-plain scene-card">
+                <strong>图片理解</strong>
+                <div>{msg.sceneCard.summary}</div>
+                {msg.sceneCard.palette && <small>主色：{msg.sceneCard.palette}</small>}
+                {msg.sceneCard.mood && <small>情绪：{msg.sceneCard.mood}</small>}
+              </div>
+            )}
+            {msg.waitingForInstruction && <div className="msg-hint">已准备好，告诉我下一步想识别、生成或修改什么。</div>}
             {msg.error && <div className="msg-error">⚠ {msg.error}</div>}
             {msg.imageJobs?.map((job) => <ImageJobCard key={job.jobId} job={job} baseUrl={baseUrl} signedIn={signedIn} onManage={onOpenProfile} />)}
           </>
