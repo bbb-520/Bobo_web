@@ -3024,6 +3024,11 @@ h4.md-h {
 .bobo-profile-state { display: grid; align-content: center; justify-items: center; min-height: 190px; padding: 24px; color: var(--ink-3); font-size: 13px; text-align: center; line-height: 1.7; }
 .bobo-profile-state button, .bobo-profile-more button, .bobo-profile-footer button { padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink-2); background: var(--surface); cursor: pointer; font: inherit; font-size: 11px; }
 .bobo-profile-list { display: grid; gap: 12px; min-height: 0; padding: 2px 4px 4px 0; overflow: auto; overscroll-behavior: contain; }
+.bobo-profile-editor { display: grid; gap: 14px; min-height: 0; padding: 2px 4px 4px 0; overflow: auto; overscroll-behavior: contain; }
+.bobo-profile-editor .accordion-gallery { flex: 0 0 auto; min-height: 260px; }
+.bobo-profile-selected { grid-template-columns: 1fr; padding: 16px; background: color-mix(in srgb, var(--surface) 94%, var(--ink) 6%); }
+.bobo-profile-selected-heading { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--line); color: var(--ink-3); font-size: 10px; }
+.bobo-profile-selected-heading strong { color: var(--ink); font-size: 14px; font-weight: 600; }
 .bobo-profile-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 15px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: color-mix(in srgb, var(--surface) 92%, var(--ink) 8%); }
 .bobo-profile-preview { display: grid; min-height: 150px; place-items: center; padding: 0; overflow: hidden; border: 0; border-radius: 10px; color: var(--ink-3); background: var(--line); cursor: zoom-in; font: inherit; font-size: 11px; }
 .bobo-profile-preview img { width: 100%; height: 100%; min-height: 150px; object-fit: cover; }
@@ -3067,6 +3072,7 @@ h4.md-h {
 .profile-key-row, .profile-key-form { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .profile-key-row code { flex: 1; color: var(--ink-2); font-size: 12px; }
 .profile-key-form input { min-width: 0; flex: 1; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
+.profile-key-form select { min-width: 108px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
 .bobo-profile-prompt { margin-bottom: 10px; padding: 9px 10px; border-radius: 10px; background: rgba(179,156,99,.12); }
 .bobo-profile-prompt span { display: block; color: var(--ink-3); font-size: 10px; }
 .bobo-profile-prompt p { margin: 4px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }

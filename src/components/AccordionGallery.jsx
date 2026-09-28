@@ -1,0 +1,12 @@
+'use client';
+import { useCallback,useEffect,useRef,useState } from 'react';
+import { gsap } from 'gsap';
+import './AccordionGallery.css';
+
+export default function AccordionGallery({items=[],defaultIndex=0,accentColor='#f7d794',overlayColor='#12100f',textColor='#fff',height=390,gap=10,radius=18,expandRatio=.52,trigger='hover',showLabels=true,grayscale=true,onActiveChange}){
+  const rootRef=useRef(null),panels=useRef([]),media=useRef([]),bars=useRef([]),labels=useRef([]),timeline=useRef(null),first=useRef(true);
+  const [active,setActive]=useState(Math.min(Math.max(defaultIndex,0),Math.max(items.length-1,0)));
+  const apply=useCallback((animate=true)=>{if(!panels.current.length)return;timeline.current?.kill();const r=Math.min(Math.max(expandRatio,.2),.9);const grow=items.length>1?(r*(items.length-1))/(1-r):1;const tl=gsap.timeline();panels.current.forEach((panel,i)=>{if(!panel)return;const on=i===active;tl.to(panel,{flexGrow:on?grow:1,rotateY:on?0:(i<active?6:-6),duration:animate?.55:0,ease:'power3.out'},0);const m=media.current[i];if(m)tl.to(m,{xPercent:-50,yPercent:-50,x:on?0:(active-i)*10,filter:grayscale&&!on?'grayscale(1)':'grayscale(0)',duration:animate?.55:0,ease:'power3.out'},0);const b=bars.current[i],l=labels.current[i];if(b&&l)tl.to([b,l],{opacity:on?1:0,x:on?0:-12,duration:animate?.45:0},0)});timeline.current=tl;onActiveChange?.(active);},[active,expandRatio,grayscale,items.length,onActiveChange]);
+  useEffect(()=>{apply(!first.current);first.current=false;return()=>timeline.current?.kill()},[apply]);
+  return <div ref={rootRef} className="accordion-gallery" style={{'--ag-accent':accentColor,'--ag-overlay':overlayColor,'--ag-text':textColor,'--ag-gap':`${gap}px`,'--ag-radius':`${radius}px`,height}} role="list" aria-label="作品图片集">{items.map((item,i)=>{const on=i===active;return <button key={item.id||i} type="button" ref={el=>panels.current[i]=el} className={`ag-panel${on?' ag-panel--active':''}`} onMouseEnter={()=>trigger==='hover'&&setActive(i)} onFocus={()=>setActive(i)} onClick={()=>setActive(i)} aria-current={on?'true':undefined} aria-label={item.label}><span className="ag-panel__frame"><span className="ag-panel__media" ref={el=>media.current[i]=el}><img src={item.image} alt={item.alt||item.label}/></span><span className="ag-panel__overlay"/></span>{showLabels&&<span className="ag-panel__label"><span className="ag-panel__bar" ref={el=>bars.current[i]=el}/><span className="ag-panel__text" ref={el=>labels.current[i]=el}>{item.label}</span></span>}</button>})}</div>;
+}

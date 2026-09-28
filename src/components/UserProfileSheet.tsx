@@ -9,6 +9,7 @@ import {
 } from '../lib/api';
 import { deleteKey, getKeyStatus, saveKeys, listModelProfiles, saveModelProfile, type ModelProfile } from '../lib/auth';
 import { IconClose } from './icons';
+import AccordionGallery from './AccordionGallery';
 
 const PAGE_SIZE = 24;
 type Draft = { caption: string; anonymous: boolean; visibility: 'PUBLIC' | 'PRIVATE' };
@@ -32,11 +33,16 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
   const [keyDraft, setKeyDraft] = useState('');
   const [keyMessage, setKeyMessage] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
   const [modelProvider, setModelProvider] = useState('QWEN');
   const [modelName, setModelName] = useState('qwen-plus');
   const [modelKey, setModelKey] = useState('');
   const [modelMessage, setModelMessage] = useState('');
+  const [imageProvider, setImageProvider] = useState('QWEN');
+  const [imageModel, setImageModel] = useState('qwen-image-3.0-pro');
+  const [imageKey, setImageKey] = useState('');
+  const [imageMessage, setImageMessage] = useState('');
 
   const load = useCallback(async (nextCursor: string | null = null, replace = true) => {
     if (!user) { setItems([]); setPublicCount(0); setLoading(false); return; }
@@ -50,6 +56,7 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
       const page = await fetchMyBoboItems(baseUrl, PAGE_SIZE, nextCursor, controller.signal);
       if (controller.signal.aborted) return;
       setItems((previous) => replace ? page.items : [...previous, ...page.items.filter((item) => !previous.some((old) => old.itemId === item.itemId))]);
+      if (replace && page.items[0]) setSelectedId(page.items[0].itemId);
       setCursor(page.nextCursor);
       setPublicCount(page.publicCount);
       setDrafts((previous) => {
@@ -84,6 +91,8 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
       setModelProfiles(rows);
       const chat = rows.find((row) => row.capability === 'CHAT');
       if (chat) { setModelProvider(chat.provider); setModelName(chat.model); }
+      const image = rows.find((row) => row.capability === 'IMAGE');
+      if (image) { setImageProvider(image.provider); setImageModel(image.model); }
     }).catch(() => setModelProfiles([]));
   }, [baseUrl, user]);
 
@@ -95,6 +104,16 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
       setModelKey('');
       setModelMessage('对话模型已保存');
     } catch (cause) { setModelMessage(cause instanceof Error ? cause.message : '保存失败'); }
+  };
+
+  const saveSelectedImageModel = async () => {
+    setImageMessage('');
+    try {
+      const saved = await saveModelProfile(baseUrl, { provider: imageProvider, capability: 'IMAGE', model: imageModel, apiKey: imageKey || undefined });
+      setModelProfiles((rows) => [...rows.filter((row) => row.capability !== 'IMAGE'), saved]);
+      setImageKey('');
+      setImageMessage('图片 Agent 已保存');
+    } catch (cause) { setImageMessage(cause instanceof Error ? cause.message : '保存失败'); }
   };
 
   const saveProviderKey = async () => {
@@ -163,6 +182,7 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
       await deleteBoboItem(baseUrl, item.itemId);
       console.info('[bobo-world] profile item deleted', { itemId: item.itemId });
       setItems((previous) => previous.filter((current) => current.itemId !== item.itemId));
+      if (selectedId === item.itemId) setSelectedId(items.find((current) => current.itemId !== item.itemId)?.itemId ?? '');
       setPublicCount((count) => Math.max(0, count - (item.visibility === 'PUBLIC' && item.status === 'ACTIVE' ? 1 : 0)));
       setFeedback((previous) => ({ ...previous, [item.itemId]: '' }));
     } catch (cause) {
@@ -208,38 +228,29 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
           {modelMessage && <div className="check-line" role="status">{modelMessage}</div>}
         </section>}
 
+        {user && <section className="profile-key-section" aria-label="图片生成 Agent 选择">
+          <div className="set-sec-title">图片生成 Agent</div>
+          <p className="hint">生成和二创任务会使用这里选择的 Agent；不配置时兼容旧版 Qwen Key。</p>
+          <div className="profile-key-form"><select value={imageProvider} onChange={(event) => setImageProvider(event.target.value)}><option value="GPT">GPT</option><option value="QWEN">Qwen</option><option value="GLM">GLM</option><option value="HY">HY</option></select><input value={imageModel} onChange={(event) => setImageModel(event.target.value)} placeholder="图片模型名称" /></div>
+          <div className="profile-key-form"><input type="password" value={imageKey} onChange={(event) => setImageKey(event.target.value)} placeholder={modelProfiles.find((row) => row.capability === 'IMAGE')?.maskedApiKey ?? '粘贴图片 Agent API Key'} autoComplete="off" /><button type="button" className="btn-ghost" onClick={() => void saveSelectedImageModel()}>保存图片 Agent</button></div>
+          {imageMessage && <div className="check-line" role="status">{imageMessage}</div>}
+        </section>}
+
         {!user ? <div className="bobo-profile-state">登录后可以查看和管理你的作品。</div> : loading ?
           <div className="bobo-profile-state" role="status">正在读取你的作品…</div> : error ?
           <div className="bobo-profile-state" role="alert"><p>{error}</p><button type="button" onClick={() => void load(null, true)}>重试</button></div> : items.length === 0 ?
           <div className="bobo-profile-state">这里还没有作品。生成图片后，可以在结果卡片中选择“加入 Bobo’s World”。</div> :
-          <div className="bobo-profile-list">
-            {items.map((item) => {
-              const draft = drafts[item.itemId] ?? { caption: item.caption ?? '', anonymous: item.anonymous, visibility: item.visibility };
-              const busy = busyId === item.itemId;
-              return <article className="bobo-profile-item" key={item.itemId}>
-                <button className="bobo-profile-preview" type="button" onClick={() => setPreview(item)} aria-label="预览作品">
-                  {brokenIds.has(item.itemId) || !item.imageUrl ? <span>图片暂不可用</span> : <img src={item.imageUrl} alt="我的 Bobo's World 作品" loading="lazy"
-                    onError={() => { console.warn('[bobo-world] profile image unavailable', { itemId: item.itemId }); setBrokenIds((old) => new Set(old).add(item.itemId)); }} />}
-                </button>
-                <div className="bobo-profile-fields">
-                  {item.prompt && <div className="bobo-profile-prompt"><span>用户提示词</span><p>{item.prompt}</p></div>}
-                  <label>文案<textarea maxLength={500} value={draft.caption} onChange={(event) => updateDraft(item.itemId, { caption: event.target.value })} placeholder="写一句作品说明（可选）" /></label>
-                  <div className="bobo-profile-controls">
-                    <label className="bobo-profile-check"><input type="checkbox" checked={draft.anonymous}
-                      onChange={(event) => updateDraft(item.itemId, { anonymous: event.target.checked })} />匿名展示</label>
-                    <label>可见性<select value={draft.visibility} onChange={(event) => updateDraft(item.itemId, { visibility: event.target.value as Draft['visibility'] })}>
-                      <option value="PUBLIC">公开</option><option value="PRIVATE">仅自己</option>
-                    </select></label>
-                    <span className="bobo-profile-status">{item.status === 'HIDDEN' ? '审核隐藏' : item.visibility === 'PUBLIC' ? '星图可见' : '仅自己可见'}</span>
-                  </div>
-                  <div className="bobo-profile-actions">
-                    <button type="button" disabled={Boolean(busyId)} onClick={() => void save(item)}>{busy ? '保存中…' : '保存修改'}</button>
-                    <button type="button" className="danger" disabled={Boolean(busyId)} onClick={() => void remove(item)}>删除</button>
-                    <span role="status">{feedback[item.itemId] ?? ''}</span>
-                  </div>
-                </div>
-              </article>;
-            })}
+          <div className="bobo-profile-editor">
+            <AccordionGallery items={items.filter((item) => item.imageUrl).map((item) => ({ id: item.itemId, image: item.imageUrl!, label: item.caption || item.prompt || '未命名作品', alt: 'Bobo’s World 作品' }))} defaultIndex={Math.max(0, items.findIndex((item) => item.itemId === selectedId))} trigger="hover" onActiveChange={(index: number) => setSelectedId(items.filter((item) => item.imageUrl)[index]?.itemId ?? selectedId)} />
+            {(() => { const item = items.find((candidate) => candidate.itemId === selectedId) ?? items[0]; if (!item) return null; const draft = drafts[item.itemId] ?? { caption: item.caption ?? '', anonymous: item.anonymous, visibility: item.visibility }; const busy = busyId === item.itemId; return <article className="bobo-profile-item bobo-profile-selected" key={item.itemId}>
+              <div className="bobo-profile-selected-heading"><span>当前作品</span><strong>{item.prompt || '未命名创作'}</strong></div>
+              <div className="bobo-profile-fields">
+                <div className="bobo-profile-prompt"><span>用户提示词</span><p>{item.prompt || '未记录提示词'}</p></div>
+                <label>文案<textarea maxLength={500} value={draft.caption} onChange={(event) => updateDraft(item.itemId, { caption: event.target.value })} placeholder="写一句作品说明（可选）" /></label>
+                <div className="bobo-profile-controls"><label className="bobo-profile-check"><input type="checkbox" checked={draft.anonymous} onChange={(event) => updateDraft(item.itemId, { anonymous: event.target.checked })} />匿名展示</label><label>可见性<select value={draft.visibility} onChange={(event) => updateDraft(item.itemId, { visibility: event.target.value as Draft['visibility'] })}><option value="PUBLIC">公开</option><option value="PRIVATE">仅自己</option></select></label><span className="bobo-profile-status">{item.status === 'HIDDEN' ? '审核隐藏' : item.visibility === 'PUBLIC' ? '星图可见' : '仅自己可见'}</span></div>
+                <div className="bobo-profile-actions"><button type="button" disabled={Boolean(busyId)} onClick={() => void save(item)}>{busy ? '保存中…' : '保存当前作品'}</button><button type="button" className="danger" disabled={Boolean(busyId)} onClick={() => void remove(item)}>删除</button><span role="status">{feedback[item.itemId] ?? ''}</span></div>
+              </div>
+            </article>; })()}
           </div>}
 
         {cursor && !loading && !error && <div className="bobo-profile-more"><button type="button" disabled={loadingMore} onClick={() => void load(cursor, false)}>
