@@ -6,11 +6,12 @@ import { IconUser } from './icons';
 import { ImageJobCard } from './ImageJobCard';
 import ThoughtLine from './ThoughtLine.jsx';
 
-export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile }: {
+export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix }: {
   msg: ChatMsg;
   baseUrl: string;
   signedIn: boolean;
   onOpenProfile: () => void;
+  onRemix?: (imageUrl: string) => void;
 }) {
   const isUser = msg.role === 'user';
   const isStreaming = msg.status === 'streaming';
@@ -62,7 +63,7 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
             )}
             {msg.waitingForInstruction && <div className="msg-hint">已准备好，告诉我下一步想识别、生成或修改什么。</div>}
             {msg.error && <div className="msg-error">⚠ {msg.error}</div>}
-            {msg.imageJobs?.map((job) => <ImageJobCard key={job.jobId} job={job} baseUrl={baseUrl} signedIn={signedIn} onManage={onOpenProfile} />)}
+            {msg.imageJobs?.map((job) => <ImageJobCard key={job.jobId} job={job} baseUrl={baseUrl} signedIn={signedIn} onManage={onOpenProfile} onRemix={onRemix} />)}
           </>
         )}
       </div>

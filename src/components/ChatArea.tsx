@@ -23,6 +23,7 @@ interface Props {
   onOpenProfile: () => void;
   user: AuthUser | null;
   onToggleNav: () => void;
+  onRemix?: (imageUrl: string) => void;
 }
 
 export default function ChatArea({
@@ -40,6 +41,7 @@ export default function ChatArea({
   onOpenProfile,
   user,
   onToggleNav,
+  onRemix,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -108,7 +110,7 @@ export default function ChatArea({
           {isEmpty ? (
             <EmptyState onAsk={sendText} />
           ) : (
-            messages.map((m) => <MessageItem key={m.id} msg={m} baseUrl={baseUrl} signedIn={signedIn} onOpenProfile={onOpenProfile} />)
+            messages.map((m) => <MessageItem key={m.id} msg={m} baseUrl={baseUrl} signedIn={signedIn} onOpenProfile={onOpenProfile} onRemix={onRemix} />)
           )}
         </div>
       </div>

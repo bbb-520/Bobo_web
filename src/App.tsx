@@ -66,6 +66,18 @@ export default function App() {
   });
   const activeConv = chat.conversations.find((conversation) => conversation.id === chat.activeId) ?? null;
   const title = activeConv?.title === '新对话' && activeConv.messages.length === 0 ? 'bobo' : activeConv?.title ?? 'bobo';
+  const remixImage = async (imageUrl: string) => {
+    try {
+      const target = new URL(imageUrl, window.location.origin);
+      if (target.protocol !== 'http:' && target.protocol !== 'https:') throw new Error('图片地址不受支持');
+      const response = await fetch(target.toString());
+      if (!response.ok) throw new Error('生成图片暂时无法读取');
+      const blob = await response.blob();
+      chat.send('请基于这张已生成图片继续二次创作。', new File([blob], 'generated-remix.png', { type: blob.type || 'image/png' }));
+    } catch (cause) {
+      push(cause instanceof Error ? cause.message : '生成图片暂时无法读取', 'err');
+    }
+  };
 
   return (
     <>
@@ -108,6 +120,7 @@ export default function App() {
             onOpenProfile={() => goto('profile')}
             user={user}
             onToggleNav={() => setNavOpen((value) => !value)}
+            onRemix={(imageUrl) => { void remixImage(imageUrl); }}
           />
         </div>
       )}

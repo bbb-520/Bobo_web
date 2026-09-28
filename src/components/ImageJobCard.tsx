@@ -5,11 +5,12 @@ import { ImageJobNotFoundError } from '../lib/imageJobPolling';
 import { IconClose, IconDownload, IconUpload } from './icons';
 import './image-job.css';
 
-export function ImageJobCard({ job, baseUrl, signedIn, onManage }: {
+export function ImageJobCard({ job, baseUrl, signedIn, onManage, onRemix }: {
   job: ImageJobRef;
   baseUrl: string;
   signedIn: boolean;
   onManage: () => void;
+  onRemix?: (imageUrl: string) => void;
 }) {
   const running = job.status === 'QUEUED' || job.status === 'PROCESSING';
   const [imageUrl, setImageUrl] = useState(job.imageUrl ?? '');
@@ -70,6 +71,7 @@ export function ImageJobCard({ job, baseUrl, signedIn, onManage }: {
           <button type="button" className="image-action-btn" onClick={downloadImage} title="下载到本地" aria-label="下载图片到本地">
             <IconDownload size={17} /><span>下载到本地</span>
           </button>
+          {onRemix && <button type="button" className="image-action-btn" onClick={() => onRemix(imageUrl)} title="继续二次创作">继续二创</button>}
           {published && <button type="button" className="image-action-btn" onClick={onManage}>管理作品</button>}
         </div>
       </div>
