@@ -22,7 +22,7 @@ function fallbackUuid(): string {
 }
 
 function scopedKey(key: string, scope = 'guest'): string {
-  const safe = scope.trim().toLowerCase().replace(/[^a-z0-9_.@-]/g, '_') || 'guest';
+  const safe = encodeURIComponent(scope.trim()) || 'guest';
   return `${key}.${safe}`;
 }
 
@@ -43,7 +43,10 @@ export function loadConversations(scope = 'guest'): Conversation[] {
         ...c,
         // 旧版本在非安全 HTTP 环境下可能生成 id-时间戳-随机串；迁移后再发送时必须使用 UUID。
         id: UUID_PATTERN.test(c.id) ? c.id : uid(),
-        messages: Array.isArray(c.messages) ? c.messages : [],
+        messages: Array.isArray(c.messages) ? c.messages.map(message =>
+          message.status === 'streaming' && !message.execution
+            ? { ...message, status: 'stopped' as const, endReason: 'aborted' as const, finishedAt: Date.now() }
+            : message) : [],
       }));
   } catch {
     return [];
@@ -60,6 +63,7 @@ export function saveConversations(list: Conversation[], scope = 'guest'): void {
         ...message,
         attachments: message.attachments?.map(({ previewUrl: _previewUrl, ...attachment }) => attachment),
         imageJobs: message.imageJobs?.map(({ imageUrl: _imageUrl, ...job }) => job),
+        zineResult: undefined, // Keep only the receipt ID; restore short-lived provider URLs from the owner API.
       })),
     }));
     localStorage.setItem(scopedKey(CONV_KEY, scope), JSON.stringify(snapshot));

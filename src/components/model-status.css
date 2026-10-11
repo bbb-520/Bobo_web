@@ -1,0 +1,11 @@
+.model-status-badge { display:flex; align-items:center; flex-wrap:wrap; gap:7px; width:fit-content; margin:8px 0; padding:6px 10px; border:1px solid color-mix(in srgb,currentColor 16%,transparent); border-radius:999px; font-size:12px; line-height:1.4; }
+.model-status-badge strong { font-weight:600; }
+.model-status-dot { width:7px; height:7px; border-radius:50%; background:#25856a; }
+.provider-qwen .model-status-dot { background:#7963bc; }
+.model-status-running .model-status-dot { animation:model-status-pulse 1.5s ease-in-out infinite; }
+.model-status-failed .model-status-dot { background:#bf5b45; }
+.model-status-stopped .model-status-dot,.model-status-waiting .model-status-dot { background:#898783; }
+.model-status-name { opacity:.72; overflow-wrap:anywhere; }
+.model-fallback-label { padding:0 5px; border-radius:4px; background:color-mix(in srgb,#7963bc 12%,transparent); }
+@keyframes model-status-pulse { 50% { opacity:.35; } }
+@media(prefers-reduced-motion:reduce) { .model-status-running .model-status-dot { animation:none; } }

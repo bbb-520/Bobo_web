@@ -1,0 +1,87 @@
+name: agentdemo
+
+# Compose v2 include merges the existing backend and infrastructure stacks into
+# this project, so one `docker compose up` starts the complete system.
+include:
+  - path: ../AgentDemo/agentDemo1_0/infra/docker-compose.yml
+  - path: ../AgentDemo/agentDemo1_0/docker-compose.app.yml
+
+services:
+  # Keep every backend build context explicit when launching from this directory.
+  agent-auth-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-auth-service/target/agent-auth-service-0.0.1-SNAPSHOT.jar
+    # Internal services are reached through the Compose network.
+    ports: !reset []
+  agent-chat-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-chat-service/target/agent-chat-service-0.0.1-SNAPSHOT.jar
+    ports: !reset []
+  agent-content-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-content-service/target/agent-content-service-0.0.1-SNAPSHOT.jar
+    ports: !reset []
+  agent-gateway:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-gateway/target/agent-gateway-0.0.1-SNAPSHOT.jar
+    ports: !override
+      - "${GATEWAY_PORT:-18000}:18000"
+  agent-media-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-media-service/target/agent-media-service-0.0.1-SNAPSHOT.jar
+    ports: !reset []
+  agent-orchestrator-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-orchestrator-service/target/agent-orchestrator-service-0.0.1-SNAPSHOT.jar
+    ports: !reset []
+  agent-rag-service:
+    build:
+      context: ../AgentDemo/agentDemo1_0
+      dockerfile: Dockerfile.service
+      args:
+        JAR_FILE: agent-rag-service/target/agent-rag-service-0.0.1-SNAPSHOT.jar
+    ports: !reset []
+  agent-web:
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+    image: agent-web:local
+    environment:
+      PORT: 5173
+      BACKEND_URL: http://agent-gateway:18000
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    depends_on:
+      agent-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nacos:
+    environment:
+      # Local single-node deployment: do not require a separately provisioned
+      # Nacos user before Spring services register themselves.
+      NACOS_AUTH_ENABLE: "false"
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+      # Nacos 3.x serves the web console on its internal 8080 port.
+      - "8081:8080"

@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+*.log
+.vscode
+.env
+.env.*
+secrets/
+*.pem
+scripts/fixtures/
+.docker-work/
+docs/
+*.md
+.workbuddy/

@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /** 开发代理：把 /api 请求转发到本地 Java 后端。 */
-const target = 'http://localhost:18080';
+const target = process.env.BACKEND_URL ?? 'http://localhost:18000';
 
 export default defineConfig({
   plugins: [react()],

@@ -1,68 +1,97 @@
-import { apiUrl } from './api';
-
-async function request<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(path, baseUrl), {
-    ...init,
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof body?.message === 'string' ? body.message : `请求失败（HTTP ${res.status}）`);
-  return body as T;
+import { apiRequest } from './http.ts';
+export interface AuthUser {
+  username: string;
+  userId?: string;
+  qqEmail?: string | null;
+  emailBound?: boolean;
+  roles?: string[];
+  permissions?: string[];
 }
-
-export interface AuthUser { username: string; userId?: string; }
-export interface KeyStatus {
-  configured: boolean;
-  masked?: string | null;
-}
-
+export const hasPermission = (user: AuthUser | null, permission: string): boolean =>
+  Boolean(user?.permissions?.includes(permission));
 export interface ModelProfile {
   provider: string;
   capability: string;
   model: string;
   enabled: boolean;
-  maskedApiKey?: string | null;
 }
-
-export function listModelProfiles(baseUrl: string): Promise<ModelProfile[]> {
-  return request<ModelProfile[]>(baseUrl, '/api/settings/models');
+export type CodePurpose = 'REGISTER' | 'LOGIN' | 'BIND';
+export const isQqEmail = (email: string) =>
+  /^[a-z0-9][a-z0-9._-]{0,63}@qq\.com$/i.test(email.trim());
+export function listModelProfiles(
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<ModelProfile[]> {
+  return apiRequest(baseUrl, '/api/settings/models', { signal });
 }
-
-export function saveModelProfile(baseUrl: string, profile: { provider: string; capability: string; model: string; apiKey?: string }): Promise<ModelProfile> {
-  return request<ModelProfile>(baseUrl, '/api/settings/models', { method: 'PUT', body: JSON.stringify(profile) });
+export function getMe(
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<AuthUser> {
+  return apiRequest(baseUrl, '/api/auth/me', { signal });
 }
-
-export function getMe(baseUrl: string): Promise<AuthUser> {
-  return request<AuthUser>(baseUrl, '/api/auth/me');
-}
-
-export function login(baseUrl: string, username: string, password: string): Promise<AuthUser> {
-  return request<AuthUser>(baseUrl, '/api/auth/login', {
-    method: 'POST', body: JSON.stringify({ username, password }),
+export function login(
+  baseUrl: string,
+  username: string,
+  password: string,
+  signal?: AbortSignal,
+): Promise<AuthUser> {
+  return apiRequest(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    signal,
   });
 }
-
-export async function register(baseUrl: string, username: string, password: string): Promise<void> {
-  await request(baseUrl, '/api/auth/register', {
-    method: 'POST', body: JSON.stringify({ username, password }),
+export function register(
+  baseUrl: string,
+  username: string,
+  password: string,
+  qqEmail: string,
+  code: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  return apiRequest(baseUrl, '/api/auth/register', {
+    method: 'POST',
+    body: JSON.stringify({ username, password, qqEmail, code }),
+    signal,
   });
 }
-
+export function emailLogin(
+  baseUrl: string,
+  qqEmail: string,
+  code: string,
+  signal?: AbortSignal,
+): Promise<AuthUser> {
+  return apiRequest(baseUrl, '/api/auth/email/login', {
+    method: 'POST',
+    body: JSON.stringify({ qqEmail, code }),
+    signal,
+  });
+}
+export function sendEmailCode(
+  baseUrl: string,
+  qqEmail: string,
+  purpose: CodePurpose,
+  signal?: AbortSignal,
+): Promise<{ expiresIn: number; resendAfter: number }> {
+  return apiRequest(baseUrl, '/api/auth/email/code', {
+    method: 'POST',
+    body: JSON.stringify({ qqEmail, purpose }),
+    signal,
+  });
+}
+export function bindEmail(
+  baseUrl: string,
+  qqEmail: string,
+  code: string,
+  signal?: AbortSignal,
+): Promise<{ qqEmail: string; emailBound: boolean }> {
+  return apiRequest(baseUrl, '/api/auth/email/bind', {
+    method: 'POST',
+    body: JSON.stringify({ qqEmail, code }),
+    signal,
+  });
+}
 export function logout(baseUrl: string): Promise<void> {
-  return request<void>(baseUrl, '/api/auth/logout', { method: 'POST' });
-}
-
-export function getKeyStatus(baseUrl: string): Promise<KeyStatus> {
-  return request<KeyStatus>(baseUrl, '/api/settings/keys');
-}
-
-export function saveKeys(baseUrl: string, qwenApiKey: string): Promise<void> {
-  return request<void>(baseUrl, '/api/settings/keys', {
-    method: 'PUT', body: JSON.stringify({ qwenApiKey }),
-  });
-}
-
-export function deleteKey(baseUrl: string, provider: 'qwen' | 'dashscope' = 'qwen'): Promise<void> {
-  return request<void>(baseUrl, `/api/settings/keys/${provider}`, { method: 'DELETE' });
+  return apiRequest(baseUrl, '/api/auth/logout', { method: 'POST' });
 }

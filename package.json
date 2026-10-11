@@ -5,13 +5,22 @@
   "type": "module",
   "description": "旅行助手 Agent 前端 —— 对接 AgentDemo(Spring Boot WebFlux + Spring AI) 的 SSE 协议",
   "scripts": {
-    "dev": "vite",
+    "dev": "node server.mjs",
+    "dev:vite": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
+    "preview": "node server.mjs",
+    "start": "node server.mjs",
     "typecheck": "tsc -b --pretty false",
     "test:storage": "node scripts/test-storage-uid.mjs",
     "test:image-job-404": "node --experimental-strip-types --test scripts/test-image-job-404.mjs",
-    "test:image-job-reconcile": "node --experimental-strip-types --test scripts/test-image-job-reconcile.mjs"
+    "test:image-job-reconcile": "node --experimental-strip-types --test scripts/test-image-job-reconcile.mjs",
+    "test:accounts-billing": "node --import=./scripts/csrf-test-env.mjs --experimental-strip-types --test scripts/test-accounts-billing.mjs",
+    "test:account-races": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-account-races.tsx",
+    "test:proxy-cancellation": "node --test scripts/test-proxy-cancellation.mjs",
+    "test:executions": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-executions.mjs scripts/test-execution-recovery.tsx",
+    "test:documents": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-documents.mjs scripts/test-document-ui.tsx",
+    "test:rbac": "node --import=tsx --test scripts/test-rbac-http.mjs scripts/test-rbac-ui.tsx",
+    "test:payment-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-payment-recovery.tsx"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",
@@ -23,15 +32,19 @@
     "maath": "^0.10.8",
     "motion": "^13.4.0",
     "ogl": "^1.0.11",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.170.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.4",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.2",
+    "jsdom": "^26.1.0",
+    "tsx": "^4.23.15",
     "typescript": "~5.6.2",
     "vite": "^5.4.8"
   }

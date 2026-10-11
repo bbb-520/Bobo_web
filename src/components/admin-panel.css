@@ -1,0 +1,25 @@
+.admin-panel { width:100%; min-width:0; }
+.admin-tabs,.admin-actions,.admin-pagination { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:16px 0; }
+.admin-tabs button,.admin-actions button,.admin-pagination button,.admin-role-list button { font:inherit; cursor:pointer; border:1px solid var(--line-strong); border-radius:10px; background:var(--paper); color:var(--ink); padding:9px 14px; }
+.admin-tabs button[aria-pressed=true] { border-color:currentColor; font-weight:600; }
+.admin-panel button:disabled { opacity:.5; cursor:default; }
+.admin-panel button:focus-visible,.admin-panel input:focus-visible,.admin-panel select:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
+.admin-table-scroll { overflow-x:auto; }
+.admin-panel table { border-collapse:collapse; width:100%; text-align:left; font-size:14px; }
+.admin-panel th,.admin-panel td { padding:12px 10px; border-bottom:1px solid var(--line-strong); vertical-align:top; }
+.admin-panel small { display:block; font-size:12px; opacity:.65; margin-top:4px; overflow-wrap:anywhere; }
+.admin-editor { display:grid; gap:14px; padding:20px 0; margin-top:12px; border-top:1px solid var(--line-strong); }
+.admin-editor h4 { margin:0; }
+.admin-editor>label { display:grid; gap:7px; font-size:14px; }
+.admin-editor input:not([type=checkbox]),.admin-editor select { width:100%; box-sizing:border-box; background:var(--paper); color:var(--ink); font:inherit; padding:10px 12px; border:1px solid var(--line-strong); border-radius:8px; }
+.admin-role-list { display:flex; flex-wrap:wrap; gap:10px; margin:20px 0; }
+.admin-role-list button { text-align:left; }
+.admin-editor fieldset { min-width:0; border:1px solid var(--line-strong); border-radius:10px; padding:14px; }
+.admin-permissions { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
+.admin-permissions label { display:flex; align-items:flex-start; gap:8px; font-size:14px; }
+.admin-permissions input { margin-top:3px; }
+.admin-audits details { padding:14px 0; border-bottom:1px solid var(--line-strong); overflow-wrap:anywhere; }
+.admin-audits summary { cursor:pointer; font-size:14px; }
+.admin-audits p { font-size:13px; line-height:1.65; }
+.admin-pagination span { font-size:13px; opacity:.7; }
+@media(max-width:600px) { .admin-panel th,.admin-panel td { padding:10px 5px; font-size:12px; } .admin-editor { padding:16px 0; } .admin-permissions { grid-template-columns:1fr; } }

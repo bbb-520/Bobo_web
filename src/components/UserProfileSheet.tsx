@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AuthUser, KeyStatus } from '../lib/auth';
+import type { AuthUser } from '../lib/auth';
 import {
   BoboApiError,
   deleteBoboItem,
@@ -7,16 +7,17 @@ import {
   patchBoboItem,
   type BoboMineItem,
 } from '../lib/api';
-import { deleteKey, getKeyStatus, saveKeys, listModelProfiles, saveModelProfile, type ModelProfile } from '../lib/auth';
+import AccountPanel from './AccountPanel';
+import type { Wallet } from '../lib/billing';
 import { IconClose } from './icons';
 import AccordionGallery from './AccordionGallery';
 
 const PAGE_SIZE = 24;
 type Draft = { caption: string; anonymous: boolean; visibility: 'PUBLIC' | 'PRIVATE' };
 
-interface Props { user: AuthUser | null; baseUrl: string; onClose: () => void; }
+interface Props { user: AuthUser | null; baseUrl: string; onClose: () => void; wallet:Wallet|null; walletError:string; connected:boolean; onUser:(user:AuthUser)=>void; onRefresh:()=>Promise<unknown>; }
 
-export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
+export default function UserProfileSheet({ user, baseUrl, onClose, wallet, walletError, connected, onUser, onRefresh }: Props) {
   const [items, setItems] = useState<BoboMineItem[]>([]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [cursor, setCursor] = useState<string | null>(null);
@@ -29,20 +30,7 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
   const [preview, setPreview] = useState<BoboMineItem | null>(null);
   const [brokenIds, setBrokenIds] = useState<Set<string>>(() => new Set());
   const requestRef = useRef<AbortController | null>(null);
-  const [keyStatus, setKeyStatus] = useState<KeyStatus | null>(null);
-  const [keyDraft, setKeyDraft] = useState('');
-  const [keyMessage, setKeyMessage] = useState('');
-  const [keyBusy, setKeyBusy] = useState(false);
   const [selectedId, setSelectedId] = useState('');
-  const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>([]);
-  const [modelProvider, setModelProvider] = useState('QWEN');
-  const [modelName, setModelName] = useState('qwen-plus');
-  const [modelKey, setModelKey] = useState('');
-  const [modelMessage, setModelMessage] = useState('');
-  const [imageProvider, setImageProvider] = useState('QWEN');
-  const [imageModel, setImageModel] = useState('qwen-image-3.0-pro');
-  const [imageKey, setImageKey] = useState('');
-  const [imageMessage, setImageMessage] = useState('');
 
   const load = useCallback(async (nextCursor: string | null = null, replace = true) => {
     if (!user) { setItems([]); setPublicCount(0); setLoading(false); return; }
@@ -79,66 +67,6 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
     void load(null, true);
     return () => requestRef.current?.abort();
   }, [load]);
-
-  useEffect(() => {
-    if (!user) { setKeyStatus(null); return; }
-    void getKeyStatus(baseUrl).then(setKeyStatus).catch(() => setKeyStatus(null));
-  }, [baseUrl, user]);
-
-  useEffect(() => {
-    if (!user) { setModelProfiles([]); return; }
-    void listModelProfiles(baseUrl).then((rows) => {
-      setModelProfiles(rows);
-      const chat = rows.find((row) => row.capability === 'CHAT');
-      if (chat) { setModelProvider(chat.provider); setModelName(chat.model); }
-      const image = rows.find((row) => row.capability === 'IMAGE');
-      if (image) { setImageProvider(image.provider); setImageModel(image.model); }
-    }).catch(() => setModelProfiles([]));
-  }, [baseUrl, user]);
-
-  const saveSelectedModel = async () => {
-    setModelMessage('');
-    try {
-      const saved = await saveModelProfile(baseUrl, { provider: modelProvider, capability: 'CHAT', model: modelName, apiKey: modelKey || undefined });
-      setModelProfiles((rows) => [...rows.filter((row) => row.capability !== 'CHAT'), saved]);
-      setModelKey('');
-      setModelMessage('对话模型已保存');
-    } catch (cause) { setModelMessage(cause instanceof Error ? cause.message : '保存失败'); }
-  };
-
-  const saveSelectedImageModel = async () => {
-    setImageMessage('');
-    try {
-      const saved = await saveModelProfile(baseUrl, { provider: imageProvider, capability: 'IMAGE', model: imageModel, apiKey: imageKey || undefined });
-      setModelProfiles((rows) => [...rows.filter((row) => row.capability !== 'IMAGE'), saved]);
-      setImageKey('');
-      setImageMessage('图片 Agent 已保存');
-    } catch (cause) { setImageMessage(cause instanceof Error ? cause.message : '保存失败'); }
-  };
-
-  const saveProviderKey = async () => {
-    if (!keyDraft.trim()) { setKeyMessage('请输入阿里云 API Key'); return; }
-    setKeyBusy(true); setKeyMessage('');
-    try {
-      await saveKeys(baseUrl, keyDraft.trim());
-      setKeyDraft('');
-      setKeyStatus(await getKeyStatus(baseUrl));
-      setKeyMessage('阿里云 API Key 已保存');
-    } catch (cause) {
-      setKeyMessage(cause instanceof Error ? cause.message : '保存失败');
-    } finally { setKeyBusy(false); }
-  };
-
-  const clearProviderKey = async () => {
-    setKeyBusy(true); setKeyMessage('');
-    try {
-      await deleteKey(baseUrl, 'qwen');
-      setKeyStatus(await getKeyStatus(baseUrl));
-      setKeyMessage('阿里云 API Key 已删除');
-    } catch (cause) {
-      setKeyMessage(cause instanceof Error ? cause.message : '删除失败');
-    } finally { setKeyBusy(false); }
-  };
 
   useEffect(() => {
     if (!preview) return;
@@ -196,50 +124,14 @@ export default function UserProfileSheet({ user, baseUrl, onClose }: Props) {
       <section className="profile-page profile-world-page" aria-label="我的 Bobo's World" onMouseDown={(event) => event.stopPropagation()}>
         <div className="sheet-head"><div><span className="profile-kicker">MY BOBO’S WORLD</span><h2>{user?.username ?? '未登录'}</h2></div>
           <button className="icon-btn light" onClick={onClose} aria-label="关闭"><IconClose size={18} /></button></div>
-        <p className="profile-sub">统一管理 API Key 和你主动发布的作品。公开作品：{publicCount} 张</p>
+        <p className="profile-sub">管理邮箱、创作余额和你主动发布的作品。公开作品：{publicCount} 张</p>
 
-        {user && <section className="profile-key-section" aria-label="阿里云 API Key">
-          <div className="set-sec-title">阿里云 API Key</div>
-          <p className="hint">用于图片二次创作。Key 只保存在当前账号，页面不会回显明文。</p>
-          <div className="profile-key-row">
-            <code>{keyStatus?.masked ?? (keyStatus?.configured ? '已配置' : '未配置')}</code>
-            <button type="button" className="btn-ghost danger" disabled={!keyStatus?.configured || keyBusy} onClick={() => void clearProviderKey()}>删除</button>
-          </div>
-          <div className="profile-key-form">
-            <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)} placeholder="粘贴 DashScope API Key" autoComplete="off" />
-            <button type="button" className="btn-ghost" disabled={keyBusy} onClick={() => void saveProviderKey()}>{keyBusy ? '保存中…' : '保存 Key'}</button>
-          </div>
-          {keyMessage && <div className="check-line" role="status">{keyMessage}</div>}
-        </section>}
-
-        {user && <section className="profile-key-section" aria-label="对话模型选择">
-          <div className="set-sec-title">对话模型</div>
-          <p className="hint">可选择 GPT、Gemini、Qwen、GLM 或 HY；每个账号独立保存 Key。</p>
-          <div className="profile-key-form">
-            <select value={modelProvider} onChange={(event) => setModelProvider(event.target.value)}>
-              <option value="GPT">GPT</option><option value="GEMINI">Gemini</option><option value="QWEN">Qwen</option><option value="GLM">GLM</option><option value="HY">HY</option>
-            </select>
-            <input value={modelName} onChange={(event) => setModelName(event.target.value)} placeholder="模型名称" />
-          </div>
-          <div className="profile-key-form">
-            <input type="password" value={modelKey} onChange={(event) => setModelKey(event.target.value)} placeholder={modelProfiles.find((row) => row.capability === 'CHAT')?.maskedApiKey ?? '粘贴模型 API Key'} autoComplete="off" />
-            <button type="button" className="btn-ghost" onClick={() => void saveSelectedModel()}>保存模型</button>
-          </div>
-          {modelMessage && <div className="check-line" role="status">{modelMessage}</div>}
-        </section>}
-
-        {user && <section className="profile-key-section" aria-label="图片生成 Agent 选择">
-          <div className="set-sec-title">图片生成 Agent</div>
-          <p className="hint">生成和二创任务会使用这里选择的 Agent；不配置时兼容旧版 Qwen Key。</p>
-          <div className="profile-key-form"><select value={imageProvider} onChange={(event) => setImageProvider(event.target.value)}><option value="GPT">GPT</option><option value="QWEN">Qwen</option><option value="GLM">GLM</option><option value="HY">HY</option></select><input value={imageModel} onChange={(event) => setImageModel(event.target.value)} placeholder="图片模型名称" /></div>
-          <div className="profile-key-form"><input type="password" value={imageKey} onChange={(event) => setImageKey(event.target.value)} placeholder={modelProfiles.find((row) => row.capability === 'IMAGE')?.maskedApiKey ?? '粘贴图片 Agent API Key'} autoComplete="off" /><button type="button" className="btn-ghost" onClick={() => void saveSelectedImageModel()}>保存图片 Agent</button></div>
-          {imageMessage && <div className="check-line" role="status">{imageMessage}</div>}
-        </section>}
+        {user && <AccountPanel key={`${baseUrl}:${user.userId ?? user.username}`} user={user} baseUrl={baseUrl} wallet={wallet} walletError={walletError} connected={connected} onUser={onUser} onRefresh={onRefresh}/>}
 
         {!user ? <div className="bobo-profile-state">登录后可以查看和管理你的作品。</div> : loading ?
           <div className="bobo-profile-state" role="status">正在读取你的作品…</div> : error ?
           <div className="bobo-profile-state" role="alert"><p>{error}</p><button type="button" onClick={() => void load(null, true)}>重试</button></div> : items.length === 0 ?
-          <div className="bobo-profile-state">这里还没有作品。生成图片后，可以在结果卡片中选择“加入 Bobo’s World”。</div> :
+          <div className="bobo-profile-state">这里还没有作品。选择“先识图再创作”生成图片后，可在结果卡片中选择“加入 Bobo’s World”。</div> :
           <div className="bobo-profile-editor">
             <AccordionGallery items={items.filter((item) => item.imageUrl).map((item) => ({ id: item.itemId, image: item.imageUrl!, label: item.caption || item.prompt || '未命名作品', alt: 'Bobo’s World 作品' }))} defaultIndex={Math.max(0, items.findIndex((item) => item.itemId === selectedId))} trigger="hover" onActiveChange={(index: number) => setSelectedId(items.filter((item) => item.imageUrl)[index]?.itemId ?? selectedId)} />
             {(() => { const item = items.find((candidate) => candidate.itemId === selectedId) ?? items[0]; if (!item) return null; const draft = drafts[item.itemId] ?? { caption: item.caption ?? '', anonymous: item.anonymous, visibility: item.visibility }; const busy = busyId === item.itemId; return <article className="bobo-profile-item bobo-profile-selected" key={item.itemId}>

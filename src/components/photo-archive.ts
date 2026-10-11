@@ -1,5 +1,10 @@
 import type { LibraryBook, PhotoBookPage } from './photo-book-pages';
-import { apiUrl } from '../lib/api';
+import memory01 from '../assets/memory-01.jpg';
+import memory02 from '../assets/memory-02.jpg';
+import memory03 from '../assets/memory-03.jpg';
+import memory04 from '../assets/memory-04.jpg';
+import memory05 from '../assets/memory-05.jpg';
+import memory06 from '../assets/memory-06.jpg';
 
 export type PhotoArchivePhoto = {
   src: string;
@@ -7,45 +12,14 @@ export type PhotoArchivePhoto = {
   filename: string;
 };
 
-type ArchiveObject = {
-  filename: string;
-  size: number;
-};
-
-const OSS_IMAGE_PROCESS_LIMIT = 20 * 1024 * 1024;
-
-/** Read the actual image objects under the backend-configured OSS archive prefix. */
-export async function fetchPhotoArchive(baseUrl = '', signal?: AbortSignal): Promise<PhotoArchivePhoto[]> {
-  const response = await fetch(apiUrl('/api/photo-archive', baseUrl), {
-    headers: { Accept: 'application/json' },
-    signal,
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-  const payload: unknown = await response.json();
-  if (!Array.isArray(payload)) throw new Error('相册清单格式无效');
-
-  const objects = payload.filter((item): item is ArchiveObject => {
-    if (!item || typeof item !== 'object') return false;
-    const candidate = item as Partial<ArchiveObject>;
-    return typeof candidate.filename === 'string'
-      && candidate.filename.length > 0
-      && typeof candidate.size === 'number'
-      && Number.isFinite(candidate.size)
-      && candidate.size >= 0;
-  });
-
-  return objects.map(({ filename, size }, index) => {
-    const path = `/api/photo-archive/${encodeURIComponent(filename)}`;
-    // OSS image processing rejects source objects over 20 MiB. Request those
-    // directly instead of leaving a permanently broken page in the album.
-    const src = size >= OSS_IMAGE_PROCESS_LIMIT ? `${path}?original=true` : path;
-    return {
-      src,
-      alt: `私人相册照片 ${String(index + 1).padStart(2, '0')}`,
-      filename,
-    };
-  });
+/** The current backend has no public photo-archive route; use the bundled author set. */
+export async function fetchPhotoArchive(_baseUrl = '', signal?: AbortSignal): Promise<PhotoArchivePhoto[]> {
+  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
+  return [memory01, memory02, memory03, memory04, memory05, memory06].map((src, index) => ({
+    src,
+    alt: `作者相册照片 ${String(index + 1).padStart(2, '0')}`,
+    filename: `memory-${String(index + 1).padStart(2, '0')}.jpg`,
+  }));
 }
 
 export function createPhotoArchiveBook(photos: PhotoArchivePhoto[]): LibraryBook | null {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { IconClose } from './icons';
 
-const KEY_PREFIX = 'bobo.onboarding.chat.v1';
+const KEY_PREFIX = 'bobo.onboarding.chat.v2';
 
 function storageKey(scope: string) {
   const safe = scope.trim().replace(/[^a-zA-Z0-9_.@-]/g, '_') || 'guest';
@@ -35,8 +35,8 @@ export default function OnboardingBubbles({ scope, onOpenProfile }: Props) {
       <section className="onboarding-bubble" role="dialog" aria-modal="false" aria-labelledby="onboarding-title">
         <button type="button" className="onboarding-close" onClick={finish} aria-label="关闭引导"><IconClose size={15} /></button>
         <span className="profile-kicker">BOBO / {step} OF 2</span>
-        <h3 id="onboarding-title">{step === 1 ? '把照片变成新的记忆' : 'API Key 在用户页配置'}</h3>
-        <p>{step === 1 ? '上传一张图片，再写下你想要的二次创作方向。生成结果可以下载，也可以主动加入 Bobo’s World。' : '打开右上角用户名进入用户页，在那里保存或更新阿里云 API Key，也能管理你发布的作品。'}</p>
+        <h3 id="onboarding-title">{step === 1 ? '把照片变成新的记忆' : '在用户页查看额度与充值'}</h3>
+        <p>{step === 1 ? '新用户获得 100 万 Token 免费额度，可用于对话、识图和文档问答；剩余不超过 10 万 Token 时提醒。图片未返回 Token 用量时按图片计费。' : '打开右上角用户名进入用户页，查看免费 Token 额度、余额和消费记录，支持支付宝与微信充值。欠费后无法交互，充值到账后可继续。'}</p>
         <div className="onboarding-actions">
           {step === 2 && <button type="button" className="onboarding-link" onClick={() => { finish(); onOpenProfile(); }}>打开用户页</button>}
           <button type="button" className="setup-primary" onClick={() => step === 1 ? setStep(2) : finish()}>{step === 1 ? '下一步' : '知道了'}</button>

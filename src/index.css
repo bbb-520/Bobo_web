@@ -3182,3 +3182,49 @@ h4.md-h {
     padding-inline: 13px;
   }
 }
+
+/* Account features reuse Bobo's existing neutral palette and typography. */
+.account-panel { display:grid; gap:20px; margin:24px 0; }
+.account-section { min-width:0; padding:20px 0; border-top:1px solid var(--line-strong); }
+.account-section h3 { margin:0 0 12px; font-size:18px; }
+.account-section h4 { margin:20px 0 10px; font-size:14px; }
+.account-section .field { margin:12px 0; }
+.account-section .setup-primary { margin-top:12px; }
+.account-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:36px; }
+.account-section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.wallet-values { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; margin:16px 0; }
+.wallet-values .token-allowance { grid-column:1/-1; }
+.wallet-values span, .wallet-values strong { display:block; overflow-wrap:anywhere; }
+.wallet-values span { font-size:12px; color:var(--ink-2); }
+.wallet-values strong { font-size:clamp(18px,2.4vw,28px); font-weight:600; font-variant-numeric:tabular-nums; }
+.account-tabs, .payment-channel { display:flex; gap:8px; margin:16px 0; }
+.account-tabs button, .payment-channel button { flex:1; padding:10px 8px; border:1px solid var(--line-strong); border-radius:var(--r-sm); background:var(--surface); color:var(--ink); font:inherit; font-size:13px; cursor:pointer; }
+.account-tabs button[aria-pressed=true], .payment-channel button[aria-pressed=true] { color:var(--surface); background:var(--ink); border-color:var(--ink); }
+.account-tabs button:disabled, .payment-channel button:disabled { opacity:.55; cursor:not-allowed; }
+.code-input-row { display:flex; gap:8px; align-items:stretch; }
+.code-input-row input { min-width:0; flex:1; }
+.code-input-row button { white-space:nowrap; flex-shrink:0; }
+.platform-models p { display:flex; justify-content:space-between; gap:12px; font-size:12px; overflow-wrap:anywhere; }
+.platform-models p.hint { display:block; }
+.account-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:14px; }
+.account-actions select { max-width:100%; padding:10px; border:1px solid var(--line-strong); border-radius:var(--r-sm); color:var(--ink); background:var(--surface); font:inherit; font-size:13px; }
+.payment-status { margin-top:18px; padding:18px; border:1px solid var(--line-strong); border-radius:var(--r-md); text-align:center; }
+.payment-status canvas { display:block; margin:12px auto; max-width:100%; background:white; }
+.payment-status small { display:block; color:var(--ink-2); overflow-wrap:anywhere; }
+.payment-status .account-actions { justify-content:center; }
+.usage-scroll { overflow:auto; }
+.usage-table { width:100%; border-collapse:collapse; font-size:12px; text-align:left; }
+.usage-table th { color:var(--ink-2); font-weight:500; }
+.usage-table th, .usage-table td { padding:12px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+.usage-table th:first-child, .usage-table td:first-child { padding-left:0; }
+.usage-table td { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.usage-table small { display:block; white-space:normal; color:var(--ink-2); }
+.zine-result { max-width:620px; padding:14px 0; }
+.zine-result img { width:100%; max-height:600px; object-fit:contain; border-radius:var(--r-md); background:var(--surface); }
+.zine-result p { font-size:13px; line-height:1.65; }
+.composer-mode { display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:12px; color:var(--ink-2); }
+.composer-mode select { min-width:0; padding:6px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; }
+.composer-billing-note { padding:8px 2px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; color:var(--ink-2); font-size:12px; }
+.composer-billing-note button { border:0; padding:0; color:var(--ink); background:transparent; text-decoration:underline; font:inherit; cursor:pointer; }
+.account-panel :focus-visible, .account-tabs :focus-visible, .code-input-row :focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
+@media(max-width:640px) { .account-columns { grid-template-columns:1fr; gap:8px; } .wallet-values { grid-template-columns:repeat(2,minmax(0,1fr)); } .account-section-heading { align-items:flex-start; } .account-section { padding:16px 0; } .usage-table th,.usage-table td { padding:10px 8px; } .setup-guide { max-height:92dvh; overflow:auto; } .composer-hint span { display:none; } }

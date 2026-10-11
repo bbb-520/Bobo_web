@@ -23,7 +23,7 @@ export default function SettingsSheet({ settings, onChange, onClose, user, onLog
             <IconClose size={18} />
           </button>
         </div>
-        <div className="sheet-sub">调整页面背景，账号与 API Key 在用户页统一管理。</div>
+        <div className="sheet-sub">调整页面背景，邮箱、余额和充值在用户页统一管理。</div>
 
         <div className="set-sec">
           <div className="set-sec-title">页面背景</div>

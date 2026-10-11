@@ -23,6 +23,7 @@ import {
   uploadImageAsset,
 } from '../lib/api';
 import { ImageJobNotFoundError, reconcileImageJobs } from '../lib/imageJobPolling';
+import { generateImage } from '../lib/zine';
 import {
   deriveTitle,
   loadActiveSessionId,
@@ -32,6 +33,11 @@ import {
   uid,
 } from '../lib/storage';
 import type { PushToast } from './useToasts';
+import { executionApi, ExecutionApiError, isExecutionActive, type ExecutionView } from '../api/executions';
+import { readModelStatus, providerLabel } from '../lib/modelStatus';
+import { loadExecutionRecovery, saveExecutionRecovery, type ExecutionRecovery } from '../lib/executionRecovery';
+import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/executionRunner';
+import type { DocumentConversation } from '../api/documents';
 
 interface BusyInfo {
   convId: string;
@@ -43,6 +49,7 @@ interface ActiveRun {
   convId: string;
   msgId: string;
   requestStop: () => void;
+  disconnect?: () => void;
 }
 
 /** DATA 增量用 rAF 节流提交，避免逐条高频 setState。 */
@@ -84,6 +91,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const openSettingsRef = useRef(openSettings);
   const activeRunRef = useRef<ActiveRun | null>(null);
   const imagePollersRef = useRef(new Map<string, number>());
+  const ownerRef = useRef(accountScope || 'guest');
+  const scopeEpoch = useRef(0);
+  const executionObservers = useRef(new Map<string,AbortController>());
+  const recoveryRef=useRef<ExecutionRecovery[]>(loadExecutionRecovery(accountScope||'guest'));
+  if (ownerRef.current !== (accountScope || 'guest')) {
+    ownerRef.current = accountScope || 'guest';
+    scopeEpoch.current++;
+  }
   /**
    * Object URLs are intentionally not persisted to localStorage, but they must
    * survive the attachment replacement that happens after the upload API
@@ -135,6 +150,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   }, [openSettings]);
 
   useEffect(() => () => {
+    scopeEpoch.current++;
+    if(activeRunRef.current?.disconnect)activeRunRef.current.disconnect();else activeRunRef.current?.requestStop();
+    executionObservers.current.forEach(controller=>controller.abort());
+    executionObservers.current.clear();
     imagePollersRef.current.forEach((timer) => window.clearInterval(timer));
     imagePollersRef.current.clear();
     attachmentPreviewRef.current.forEach((previewUrl) => URL.revokeObjectURL(previewUrl));
@@ -155,8 +174,22 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   useEffect(() => {
     const nextScope = accountScope || 'guest';
     if (nextScope === scope) return;
+    if(activeRunRef.current?.disconnect)activeRunRef.current.disconnect();else activeRunRef.current?.requestStop();
+    executionObservers.current.forEach(controller=>controller.abort());
+    executionObservers.current.clear();
+    activeRunRef.current = null;
+    busyRef.current = null;
+    setBusy(null);
+    imagePollersRef.current.forEach(timer => window.clearInterval(timer));
+    imagePollersRef.current.clear();
+    saveConversations(listRef.current.map(c => ({ ...c, messages:c.messages.map(m => m.status==='streaming'&&!m.execution ? {...m,status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()} : m) })), scope);
+    attachmentPreviewRef.current.forEach(url => URL.revokeObjectURL(url));
+    attachmentPreviewRef.current.clear();
     const nextConversations = restoreAttachmentPreviews(loadConversations(nextScope));
+    listRef.current = nextConversations;
+    activeRef.current = null;
     setScope(nextScope);
+    recoveryRef.current=loadExecutionRecovery(nextScope);
     setConversations(nextConversations);
     setActiveId(null);
     const last = loadActiveSessionId(nextScope);
@@ -210,26 +243,30 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
 
   const watchImageJob = (convId: string, msgId: string, jobId: string) => {
     if (imagePollersRef.current.has(jobId)) return;
+    const epoch = scopeEpoch.current;
+    let polling = false;
     const stopPolling = () => {
       const timer = imagePollersRef.current.get(jobId);
       if (timer) window.clearInterval(timer);
       imagePollersRef.current.delete(jobId);
     };
     const tick = async () => {
+      if(epoch!==scopeEpoch.current||polling)return;
+      polling=true;
       try {
         const job = await fetchImageJob(jobId, settingsRef.current.baseUrl);
-        if (!job) return;
+        if (!job || epoch!==scopeEpoch.current) return;
         patchJob(convId, msgId, job);
         if (job.status === 'SUCCEEDED' || job.status === 'FAILED' || job.status === 'CANCELED' || job.status === 'EXPIRED') {
           stopPolling();
           if (job.status === 'SUCCEEDED') notifyRef.current('图片已生成，结果已回到当前对话');
         }
       } catch (error) {
-        if (!(error instanceof ImageJobNotFoundError)) return;
+        if (epoch!==scopeEpoch.current || !(error instanceof ImageJobNotFoundError)) return;
         stopPolling();
         removeImageJob(convId, msgId, jobId);
         notifyRef.current('图片任务已失效，请重新上传图片');
-      }
+      } finally { polling=false; }
     };
     void tick();
     const timer = window.setInterval(() => void tick(), 3500);
@@ -237,9 +274,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   };
 
   const hydrateImageJobs = async (convId: string) => {
+    const epoch = scopeEpoch.current;
     const jobs = await fetchConversationImageJobs(convId, settingsRef.current.baseUrl);
     // null means the refresh failed; retain local cards and retry on the next session refresh.
-    if (jobs === null) return;
+    if (jobs === null || epoch!==scopeEpoch.current) return;
     setConversations((ls) => ls.map((c) => {
       if (c.id !== convId) return c;
       return reconcileImageJobs(c, jobs);
@@ -248,10 +286,129 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     if (assistantId) jobs.filter((job) => job.status === 'QUEUED' || job.status === 'PROCESSING').forEach((job) => watchImageJob(convId, assistantId, job.jobId));
   };
 
+  const mutateExecutionConversations=(fn:(items:Conversation[])=>Conversation[])=>{
+    const next=fn(listRef.current);listRef.current=next;setConversations(next);saveConversations(next,ownerRef.current);
+  };
+  const persistRecovery=()=>saveExecutionRecovery(ownerRef.current,recoveryRef.current);
+  const patchExecution=(entry:ExecutionRecovery,view?:ExecutionView,connection='')=>{
+    mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,updatedAt:Date.now(),messages:c.messages.map(m=>m.id!==entry.msgId?m:{
+      ...m,...(view?{execution:view,content:view.answer,status:isExecutionActive(view)?'streaming' as const:view.status==='FAILED'?'error' as const:view.status==='COMPLETED'?'done' as const:'stopped' as const,error:view.error??undefined,finishedAt:isExecutionActive(view)?undefined:Date.now()}:{}),executionConnection:connection,
+    })}));
+  };
+  const observeDurable=(entry:ExecutionRecovery,initial?:ExecutionView,recover=true)=>{
+    if(executionObservers.current.has(entry.msgId))return;
+    const epoch=scopeEpoch.current,controller=new AbortController(),api=executionApi(settingsRef.current.baseUrl);
+    executionObservers.current.set(entry.msgId,controller);
+    const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
+    const publish=(view:ExecutionView)=>{
+      if(!valid())return;
+      entry.executionId=view.executionId;entry.lastSeq=view.lastSeq;persistRecovery();patchExecution(entry,view);
+      if(isExecutionActive(view)) {
+        busyRef.current={convId:entry.convId,msgId:entry.msgId};setBusy(busyRef.current);
+      }
+    };
+    const stopRequest=()=>{
+      if(!valid())return;
+      entry.stopRequested=true;persistRecovery();patchExecution(entry,undefined,'正在请求停止…');
+      if(entry.executionId)void api.stop(entry.executionId,controller.signal).then(publish).catch(error=>{
+        if(valid()){patchExecution(entry,undefined,'停止请求暂未确认，正在同步状态。');notifyRef.current(error instanceof Error?error.message:'停止请求失败','err');}
+      });
+    };
+    activeRunRef.current={convId:entry.convId,msgId:entry.msgId,requestStop:stopRequest,disconnect:()=>controller.abort()};
+    busyRef.current={convId:entry.convId,msgId:entry.msgId};setBusy(busyRef.current);
+    void(async()=>{
+      let view=initial,attempt=0;
+      try {
+        while(valid()&&!view) {
+          try {
+            if(entry.executionId)view=await api.get(entry.executionId,controller.signal);
+            else if(recover) {
+              try {view=await api.find(entry.request.requestId,controller.signal);}
+              catch(error){if(error instanceof ExecutionApiError&&error.status===404)view=await api.create(entry.request,controller.signal);else throw error;}
+            } else {recover=true;view=await api.create(entry.request,controller.signal);}
+          } catch(error) {
+            if(!valid())return;
+            if(error instanceof ExecutionApiError&&[400,401,402,403,404,409,413,422].includes(error.status))throw error;
+            patchExecution(entry,undefined,'请求正在恢复，请勿重复发送。');
+            await cancellableDelay(reconnectDelay(attempt++),controller.signal);
+          }
+        }
+        if(!view||!valid())return;
+        if(entry.resumeRequest) {view=await api.resume(view.executionId,entry.resumeRequest,controller.signal);entry.resumeRequest=undefined;}
+        publish(view);
+        if(entry.stopRequested&&isExecutionActive(view)) {
+          // A stop intent survives reload and ambiguous HTTP results; repeating stop is safe.
+          try {view=await api.stop(view.executionId,controller.signal);publish(view);} catch { /* Poll the authoritative state below. */ }
+        }
+        const final=await observeExecution(view,{api:{...api,get:async(id,signal)=>{
+          const current=await api.get(id,signal);
+          if(entry.stopRequested&&isExecutionActive(current))return api.stop(id,signal);
+          return current;
+        }},signal:controller.signal,onSnapshot:publish,onConnection:message=>{if(valid())patchExecution(entry,undefined,message);}});
+        if(valid()&&final&&!isExecutionActive(final)) {recoveryRef.current=recoveryRef.current.filter(item=>item.msgId!==entry.msgId);persistRecovery();}
+      } catch(error) {
+        if(valid()) {
+          const message=error instanceof Error?error.message:'执行状态暂时无法读取';
+          patchExecution(entry,undefined,message);notifyRef.current(message,'err');
+          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped'})}));
+          // Keep the original request ID for uncertain create/resume outcomes.
+        }
+      } finally {
+        if(epoch===scopeEpoch.current) {
+          executionObservers.current.delete(entry.msgId);
+          if(busyRef.current?.msgId===entry.msgId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
+        }
+      }
+    })();
+  };
+
+  useEffect(()=>{
+    if(scope!==ownerRef.current)return;
+    recoveryRef.current=loadExecutionRecovery(scope);
+    recoveryRef.current.forEach(entry=>{
+      if(listRef.current.some(c=>c.id===entry.convId&&c.messages.some(m=>m.id===entry.msgId)))observeDurable(entry);
+    });
+    // Restoring subscribes to durable work; cleanup must never call /stop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[scope]);
+
+  const sendTextExecution=(text:string)=>{
+    let conv=listRef.current.find(c=>c.id===activeRef.current);
+    const now=Date.now();
+    if(!conv) {conv={id:uid(),title:deriveTitle(text),messages:[],createdAt:now,updatedAt:now};applyActive(conv.id);activeRef.current=conv.id;}
+    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now};
+    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:'正在提交…'};
+    const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
+    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
+    const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:conv.documentConversationId?'DOCUMENT_QA':'CHAT',question:text,...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
+    recoveryRef.current.push(entry);persistRecovery();observeDurable(entry,undefined,false);
+  };
+
+  const resumeExecution=(msgId:string,instruction?:string)=>{
+    if(busyRef.current)return;
+    const conv=listRef.current.find(c=>c.messages.some(m=>m.id===msgId));const message=conv?.messages.find(m=>m.id===msgId);const view=message?.execution;
+    let entry=recoveryRef.current.find(item=>item.msgId===msgId);
+    if(!entry&&conv&&view)entry={convId:conv.id,msgId,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
+    if(!entry)return;
+    entry.stopRequested=false;
+    if(view&&!isExecutionActive(view))entry.resumeRequest??={requestId:uid(),expectedVersion:view.version,additionalRounds:4,...(instruction?.trim()?{instruction:instruction.trim()}: {})};
+    if(!recoveryRef.current.some(item=>item.msgId===msgId))recoveryRef.current.push(entry);
+    persistRecovery();observeDurable(entry,view);
+  };
+
+  const setDocumentContext=(context:DocumentConversation|null)=>{
+    if(busyRef.current)return;
+    let conv=listRef.current.find(c=>c.id===activeRef.current);
+    if(!conv){const now=Date.now();conv={id:uid(),title:'新对话',messages:[],createdAt:now,updatedAt:now};applyActive(conv.id);activeRef.current=conv.id;}
+    const next={...conv,documentConversationId:context?.conversationId,documentIds:context?.documentIds,indexVersions:context?.indexVersions};
+    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
+  };
+
   /* ---------- 发送（SSE 状态机） ---------- */
-  const send = (raw: string, file?: File) => {
+  const send = (raw: string, file?: File, kind:'image'|'chat'='image') => {
     const text = raw.trim();
     if ((!text && !file) || busyRef.current) return;
+    if(!file){sendTextExecution(text);return;}
 
     let convId = activeRef.current ?? '';
     const exists = listRef.current.some((c) => c.id === convId);
@@ -303,6 +460,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         : [conv, ...ls];
     });
 
+    const epoch = scopeEpoch.current;
     const convId2 = convId;
     const asstId = asstMsg.id;
     const controller = new AbortController();
@@ -313,7 +471,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
 
     /** 定向更新当前助手消息（其它消息/会话保持引用不变，利于 memo） */
     const patchAsst = (fn: (m: ChatMsg) => ChatMsg) =>
-      setConversations((ls) =>
+      setConversations((ls) => epoch!==scopeEpoch.current ? ls :
         ls.map((c) =>
           c.id !== convId2
             ? c
@@ -322,7 +480,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       );
 
     const patchUser = (attachment: ImageAttachment) =>
-      setConversations((ls) => ls.map((c) => c.id !== convId2 ? c : {
+      setConversations((ls) => epoch!==scopeEpoch.current ? ls : ls.map((c) => c.id !== convId2 ? c : {
         ...c,
         messages: c.messages.map((m) => {
           if (m.id !== userMsg.id) return m;
@@ -430,6 +588,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       if (settled) return;
       settled = true;
       flushText();
+      if(epoch!==scopeEpoch.current)return;
       patchAsst((m) => {
         const calls = m.toolCalls ?? [];
         const hasRunning = calls.some((t) => t.status === 'running');
@@ -447,6 +606,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       setConversations((ls) =>
         ls.map((c) => (c.id === convId2 ? { ...c, updatedAt: Date.now() } : c)),
       );
+      busyRef.current = null;
       setBusy(null);
       activeRunRef.current = null;
       if (activeRef.current !== convId2) {
@@ -465,14 +625,38 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     };
 
     activeRunRef.current = { convId: convId2, msgId: asstId, requestStop };
+    busyRef.current = { convId: convId2, msgId: asstId };
     setBusy({ convId: convId2, msgId: asstId });
 
     /** 后端事件分派。思考过程和工具事件只用于兼容旧协议，不渲染到界面。 */
     const onLiveEvent = (e: ChatEvent) => {
+      if(epoch!==scopeEpoch.current)return;
       switch (e.eventType) {
         case EVENT.DATA:
           if (typeof e.eventData === 'string' && e.eventData) pushText(e.eventData);
           break;
+        case EVENT.ANSWER_REPLACE: {
+          const data=e.eventData as {payload?:{text?:unknown}} | null;
+          if(typeof data?.payload?.text==='string'){
+            if(rafId!=null){CAF(rafId);rafId=null;}
+            textBuf='';patchAsst(m=>({...m,content:data.payload!.text as string}));
+          }
+          break;
+        }
+        case EVENT.MODEL_STATUS: {
+          const data=e.eventData as {generationVersion?:number;payload?:unknown} | null;
+          const status=readModelStatus(data?.payload);
+          if(status&&Number.isInteger(data?.generationVersion))patchAsst(m=>
+            (m.modelStatus?.generationVersion??0)>(data!.generationVersion as number)?m:
+              {...m,modelStatus:{...status,generationVersion:data!.generationVersion}});
+          break;
+        }
+        case EVENT.FALLBACK_STARTED: {
+          const data=e.eventData as {payload?:unknown}|null;
+          const status=readModelStatus(data?.payload);
+          notifyRef.current(status?`${providerLabel(status.provider)}兜底模型正在接手`:'主回答服务暂时不可用，备用模型正在接手');
+          break;
+        }
         case EVENT.REASONING: {
           // 思考过程只兼容旧协议，产品界面不保存也不展示。
           break;
@@ -535,6 +719,19 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     };
 
     const run = (async () => {
+      if (file && kind === 'image') {
+        try {
+          const result = await generateImage(settingsRef.current.baseUrl,file,text,controller.signal);
+          patchAsst(m => ({...m,zineRequestId:result.requestId,zineResult:result,content:'图片创作已完成。'}));
+          finish('done',{endReason:'stop'});
+        } catch(cause) {
+          if(epoch!==scopeEpoch.current)return;
+          const message = controller.signal.aborted ? '已停止等待。已受理的消费可能需要对账，请到用户页查看余额和生成回执。' : cause instanceof Error ? cause.message : '生成结果暂时无法读取，请到用户页恢复回执';
+          finish(controller.signal.aborted?'stopped':'error',{error:message,endReason:controller.signal.aborted?'stopped_by_user':'error'});
+          notifyRef.current(message,'err',{label:'查看账户',on:()=>openSettingsRef.current()});
+        }
+        return;
+      }
       let uploadedAttachment: ImageAttachment | undefined;
       if (file) {
         try {
@@ -547,6 +744,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         }
       }
 
+      if(epoch!==scopeEpoch.current||controller.signal.aborted){finish('stopped',{endReason:'aborted'});return;}
       const res = await streamChat({
         question: text,
         sessionId: convId2, // 会话 id 即后端 sessionId，对话/停止/历史/清空统一携带
@@ -556,12 +754,12 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         onEvent: onLiveEvent,
       });
 
-      if (!settled) {
+      if (epoch===scopeEpoch.current && !settled) {
         if (res.kind === 'error') {
           // 请求前就失败（HTTP 非 200 / 网络不可达）
           finish('error', { error: res.message, endReason: 'error' });
-          notifyRef.current('连接后端失败', 'err', {
-            label: '打开设置',
+          notifyRef.current(res.message ?? '连接后端失败', 'err', {
+            label: '查看账户',
             on: () => openSettingsRef.current(),
           });
         } else if (res.kind === 'timeout') {
@@ -614,6 +812,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const removed = listRef.current.find((conversation) => conversation.id === id);
     if (removed) releaseAttachmentPreviews(removed.messages);
     setConversations((ls) => ls.filter((c) => c.id !== id));
+    recoveryRef.current=recoveryRef.current.filter(entry=>entry.convId!==id);persistRecovery();
     if (activeRef.current === id) {
       setActiveId(null);
       saveActiveSessionId(null, scope);
@@ -624,9 +823,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const conv = listRef.current.find((c) => c.id === activeRef.current);
     if (!conv || busyRef.current) return;
     releaseAttachmentPreviews(conv.messages);
-    setConversations((ls) =>
-      ls.map((c) => (c.id === conv.id ? { ...c, messages: [], updatedAt: Date.now() } : c)),
-    );
+    const nextId=uid();
+    mutateExecutionConversations(ls=>ls.map(c=>c.id===conv.id?{...c,id:nextId,messages:[],documentConversationId:undefined,documentIds:undefined,indexVersions:undefined,updatedAt:Date.now()}:c));
+    recoveryRef.current=recoveryRef.current.filter(entry=>entry.convId!==conv.id);persistRecovery();
+    applyActive(nextId);activeRef.current=nextId;
     notifyRef.current('已清空当前会话');
   };
 
@@ -640,5 +840,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     newChat,
     removeConversation,
     clearContext,
+    resumeExecution,
+    setDocumentContext,
   };
 }

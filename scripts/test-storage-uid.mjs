@@ -45,3 +45,13 @@ assert.match(
 );
 
 console.log(`legacy conversation id migration passed: ${migrated[0].id}`);
+
+context.localStorage.getItem = () => JSON.stringify([{id:'22222222-2222-4222-8222-222222222222',messages:[
+  {id:'image',role:'assistant',status:'streaming',modelStatus:{provider:'GPT',model:'gpt-4.1',state:'RUNNING',generationVersion:1}},
+  {id:'durable',role:'assistant',status:'streaming',execution:{executionId:'task',status:'RUNNING'}},
+]}]);
+const restored=module.exports.loadConversations('guest')[0].messages;
+assert.equal(restored[0].status,'stopped','a disconnected image stream must not stay working after reload');
+assert.equal(restored[0].modelStatus.provider,'GPT','keep the actual model identity on reload');
+assert.equal(restored[1].status,'streaming','durable tasks must remain available for reattachment');
+console.log('model status restoration passed');

@@ -5,13 +5,17 @@ import { AgentOrb } from './Avatar';
 import { IconUser } from './icons';
 import { ImageJobCard } from './ImageJobCard';
 import ThoughtLine from './ThoughtLine.jsx';
+import ZineResultCard from './ZineResultCard';
+import ExecutionDetails from './ExecutionDetails';
+import ModelStatusBadge from './ModelStatusBadge';
 
-export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix }: {
+export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix, onResume }: {
   msg: ChatMsg;
   baseUrl: string;
   signedIn: boolean;
   onOpenProfile: () => void;
   onRemix?: (imageUrl: string) => void;
+  onResume?:(id:string,instruction?:string)=>void;
 }) {
   const isUser = msg.role === 'user';
   const isStreaming = msg.status === 'streaming';
@@ -52,6 +56,7 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
           </>
         ) : (
           <>
+            {!msg.execution && <ModelStatusBadge status={msg.modelStatus} taskStatus={msg.status}/>}
             {msg.content && <div className="bubble-plain"><Markdown content={msg.content} />{isStreaming && <span className="caret" />}</div>}
             {msg.sceneCard && (
               <div className="bubble-plain scene-card">
@@ -63,6 +68,8 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
             )}
             {msg.waitingForInstruction && <div className="msg-hint">已准备好，告诉我下一步想识别、生成或修改什么。</div>}
             {msg.error && <div className="msg-error">⚠ {msg.error}</div>}
+            <ExecutionDetails msg={msg} baseUrl={baseUrl} onResume={onResume}/>
+            {msg.zineRequestId && signedIn && <ZineResultCard baseUrl={baseUrl} requestId={msg.zineRequestId} initial={msg.zineResult} onRemix={onRemix}/>}
             {msg.imageJobs?.map((job) => <ImageJobCard key={job.jobId} job={job} baseUrl={baseUrl} signedIn={signedIn} onManage={onOpenProfile} onRemix={onRemix} />)}
           </>
         )}

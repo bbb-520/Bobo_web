@@ -4,15 +4,14 @@ import {
   type ImageJobRef,
 } from '../types';
 import { imageJobResponseAction, ImageJobNotFoundError } from './imageJobPolling';
+import { apiUrl, csrfFetch } from './http';
+export { apiUrl } from './http';
 
 /**
  * 拼接后端地址：baseUrl 为空时使用同源(开发经 Vite 代理 /api → Java 后端)。
  */
-export function apiUrl(path: string, baseUrl: string): string {
-  const b = baseUrl.trim().replace(/\/+$/, '');
-  return b ? `${b}${path}` : path;
-}
-export type StreamResult = { kind: 'done' | 'error' | 'timeout'; message?: string };
+
+export type StreamResult = { kind: 'done' | 'error' | 'timeout'; message?: string; status?: number };
 
 export interface StreamChatOptions {
   question: string;
@@ -87,7 +86,7 @@ export async function streamChat(opts: StreamChatOptions): Promise<StreamResult>
   };
 
   try {
-    const res = await fetch(apiUrl('/api/chat', baseUrl), {
+    const res = await csrfFetch(baseUrl, '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
       body: JSON.stringify({ question, sessionId, attachments: attachments?.length ? attachments : undefined }),
@@ -98,7 +97,9 @@ export async function streamChat(opts: StreamChatOptions): Promise<StreamResult>
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      return { kind: 'error', message: `后端返回 HTTP ${res.status}${body ? '：' + body.slice(0, 120) : ''}` };
+      let message = res.status === 401 ? '登录已过期，请重新登录' : res.status === 402 ? '余额不足，请充值后继续' : res.status === 409 ? '账户有请求处理中或待对账，请稍后再试' : `请求失败（HTTP ${res.status}）`;
+      try { const problem = JSON.parse(body); message = problem.message || problem.detail || message; } catch { /* Use the status fallback. */ }
+      return { kind: 'error', message, status: res.status };
     }
     if (!res.body) return { kind: 'error', message: '浏览器不支持流式响应' };
 
@@ -137,7 +138,7 @@ export async function streamChat(opts: StreamChatOptions): Promise<StreamResult>
       return { kind: 'done', message: '已停止' };
     }
     const url = apiUrl('/api/chat', baseUrl);
-    const tail = '（请确认本地 Spring Boot 后端已启动在 http://localhost:18080）';
+    const tail = '（请确认 Gateway 已启动并可通过当前站点访问）';
     const msg =
       err instanceof TypeError
         ? `无法连接 ${url}${tail}`
@@ -160,9 +161,32 @@ export interface UploadPolicyResponse {
 
 export interface ImageJobView extends ImageJobRef {}
 
+export interface ZineGenerationResponse {
+  mode: string;
+  language: string;
+  prompt: string;
+  imageUrl?: string | null;
+}
+
+/** Generate a zine image through the backend content service. */
+export async function generateZine(
+  file: File,
+  options: { mode?: string; language?: string; text?: string; guidance?: string },
+  baseUrl: string,
+  signal?: AbortSignal,
+): Promise<ZineGenerationResponse> {
+  const form = new FormData();
+  form.append('image', file, file.name);
+  for (const [key, value] of Object.entries(options)) if (value) form.append(key, value);
+  const response = await csrfFetch(baseUrl, '/api/zine/generate', { method: 'POST', body: form, credentials: 'include', signal });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof body?.message === 'string' ? body.message : `生成失败（HTTP ${response.status}）`);
+  return body as ZineGenerationResponse;
+}
+
 /** 前端先拿短期 PostObject 策略，再把图片直接送到 OSS，不经过 Java 服务内存。 */
 export async function uploadImageAsset(file: File, baseUrl: string, signal?: AbortSignal): Promise<ImageAttachment> {
-  const policyResponse = await fetch(apiUrl('/api/image-assets/upload-policy', baseUrl), {
+  const policyResponse = await csrfFetch(baseUrl, '/api/image-assets/upload-policy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -195,7 +219,7 @@ export async function uploadImageAsset(file: File, baseUrl: string, signal?: Abo
     throw new Error(message || `图片上传 OSS 失败（${uploaded.status}）`);
   }
 
-  const completed = await fetch(apiUrl(`/api/image-assets/${encodeURIComponent(policy.assetId)}/complete`, baseUrl), {
+  const completed = await csrfFetch(baseUrl, `/api/image-assets/${encodeURIComponent(policy.assetId)}/complete`, {
     method: 'POST',
     credentials: 'include',
     signal,
@@ -211,7 +235,7 @@ export async function uploadImageAsset(file: File, baseUrl: string, signal?: Abo
 
 export async function fetchImageJob(jobId: string, baseUrl: string, signal?: AbortSignal): Promise<ImageJobView | null> {
   try {
-    const response = await fetch(apiUrl(`/api/image-jobs/${encodeURIComponent(jobId)}`, baseUrl), {
+    const response = await csrfFetch(baseUrl, `/api/image-jobs/${encodeURIComponent(jobId)}`, {
       credentials: 'include', signal,
     });
     const action = imageJobResponseAction(response.status);
@@ -226,7 +250,7 @@ export async function fetchImageJob(jobId: string, baseUrl: string, signal?: Abo
 }
 export async function fetchConversationImageJobs(conversationId: string, baseUrl: string): Promise<ImageJobView[] | null> {
   try {
-    const response = await fetch(apiUrl(`/api/image-jobs?conversationId=${encodeURIComponent(conversationId)}`, baseUrl), {
+    const response = await csrfFetch(baseUrl, `/api/image-jobs?conversationId=${encodeURIComponent(conversationId)}`, {
       credentials: 'include',
     });
     if (!response.ok) return null;
@@ -283,7 +307,7 @@ export interface BoboPublishResult {
 }
 
 async function boboRequest<T>(path: string, baseUrl: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(apiUrl(path, baseUrl), {
+  const response = await csrfFetch(baseUrl, path, {
     ...init,
     credentials: 'include',
     headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) },

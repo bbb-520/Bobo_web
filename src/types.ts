@@ -25,6 +25,9 @@ export const EVENT = {
   SCENE_CARD: 1012,
   WAITING_FOR_INSTRUCTION: 1013,
   GENERATION_CREATED: 1014,
+  ANSWER_REPLACE: 1015,
+  FALLBACK_STARTED: 1016,
+  MODEL_STATUS: 1017,
 } as const;
 
 /** SSE 中一条 `data:` 对应的原始结构：{"eventType":1001,"eventData":"..."} */
@@ -129,6 +132,7 @@ export interface ToolCallItem {
 }
 
 export interface ChatMsg {
+  modelStatus?: import('./lib/modelStatus').ModelStatus;
   id: string;
   role: Role;
   /** 最终回答（仅 DATA 增量拼接），不含思考/工具过程文本 */
@@ -152,6 +156,10 @@ export interface ChatMsg {
   imageJobs?: ImageJobRef[];
   sceneCard?: SceneCardEventData;
   waitingForInstruction?: boolean;
+  zineRequestId?: string;
+  zineResult?: import('./lib/zine').ZineResult;
+  execution?: import('./api/executions').ExecutionView;
+  executionConnection?: string;
 }
 
 /** 一个会话 = 一个后端 sessionId（记忆上下文），加上本地持久化的消息列表 */
@@ -161,17 +169,20 @@ export interface Conversation {
   messages: ChatMsg[];
   createdAt: number;
   updatedAt: number;
+  documentConversationId?:string;
+  documentIds?:string[];
+  indexVersions?:Record<string,number>|number[];
 }
 
 export interface Settings {
-  /** 后端地址；留空 = 同源（开发时走 Vite 代理 /api，生产时由 Nginx 代理 /api）。 */
+  /** 后端地址；留空 = 同源（开发时可走 Vite 代理 /api，生产时由 Node 代理 /api）。 */
   baseUrl: string;
   theme: 'light' | 'dark';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   // 开发时走 Vite /api 代理，浏览器看到的是同源请求，HttpOnly 登录 Cookie
-  // 刷新后可以稳定回传；生产时由 Nginx 提供静态页并代理 /api。
+  // 刷新后可以稳定回传；生产时由 Node 提供静态页并代理 /api。
   baseUrl: '',
   theme: 'light',
 };
