@@ -447,3 +447,20 @@
   .bobo-world-flight, .bobo-world-details, .bobo-world-close { transition: none; }
   .bobo-world-details { opacity: 1; transform: translateX(-50%); }
 }
+
+/* One viewport and one canvas for every album view; controls float above it. */
+.bobo-world { position:fixed; inset:0; width:100%; height:100dvh; min-height:0; overflow:hidden; background:#fff; }
+.bobo-world .world-header { position:absolute; inset:0 0 auto; pointer-events:none; background:transparent; }
+.bobo-world .world-header button { pointer-events:auto; }
+.bobo-world .world-main { position:absolute; inset:0; width:100%; height:100%; min-height:0; padding:0; background:transparent; }
+.bobo-world .bobo-space-viewport { width:100%; height:100%; min-height:0; border:0; border-radius:0; background:transparent; }
+.bobo-world .world-book, .bobo-world .gallery-surface { width:100%; height:100%; min-height:0; background:transparent; }
+.bobo-world .world-book .library-scene { height:100%; min-height:0; background:transparent; }
+.bobo-world .world-view-loading { width:100%; height:100%; min-height:0; color:#727a74; background:transparent; }
+.bobo-world .world-dock button { color:#727a74; border-color:#dedee1; background:rgba(255,255,255,.85); }
+.bobo-world .world-dock button.is-active, .bobo-world .world-dock button:hover, .bobo-world .world-dock button:focus-visible { color:#263128; border-color:#a8874d; background:#fff; }
+.bobo-world .world-book .library-index button { color:#263128; border-color:#dedee1; background:rgba(255,255,255,.86); }
+.bobo-world .world-book .library-index button span { color:#727a74; }
+.bobo-world .world-book .detail-controls { color:#263128; }
+.bobo-world .world-book .detail-controls button { color:#263128; border-color:#dedee1; background:rgba(255,255,255,.86); }
+.world-loading { position:fixed; inset:0; min-height:0; background:#fff; }

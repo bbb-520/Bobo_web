@@ -9,13 +9,14 @@ import ZineResultCard from './ZineResultCard';
 import ExecutionDetails from './ExecutionDetails';
 import ModelStatusBadge from './ModelStatusBadge';
 
-export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix, onResume }: {
+export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix, onResume, onRetryAttachments }: {
   msg: ChatMsg;
   baseUrl: string;
   signedIn: boolean;
   onOpenProfile: () => void;
   onRemix?: (imageUrl: string) => void;
   onResume?:(id:string,instruction?:string)=>void;
+  onRetryAttachments?:(id:string)=>void;
 }) {
   const isUser = msg.role === 'user';
   const isStreaming = msg.status === 'streaming';
@@ -27,19 +28,20 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
           <div className="avatar"><AgentOrb pulse={isStreaming && !msg.content} /></div>
           <ThoughtLine
             working={isStreaming}
+            startedAt={msg.startedAt ?? msg.createdAt}
+            finishedAt={msg.finishedAt}
             steps={['Reading the question', 'Searching your notes', 'Drafting an answer']}
             label="Thinking…"
-            doneLabel="Thought for"
             glyph="sparkle"
-            fontSize={16}
+            fontSize={13}
             breathPeriod={1.6}
             breathDepth={0.45}
             settleDuration={350}
             settleBlur={2}
             collapsible
             collapseOnSettle
-            showTimer
-            onSettle={(seconds: number) => console.log(`thought for ${seconds}s`)}
+            showTimer={isStreaming || msg.finishedAt != null}
+            doneLabel={msg.finishedAt != null ? 'Thought for' : '已完成'}
           />
         </div>
       ) : <div className="avatar av-user"><IconUser size={17} /></div>}
@@ -47,11 +49,15 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
         {isUser ? (
           <>
             {msg.attachments?.map((attachment) => (
-              <div className="user-image-message" key={attachment.assetId}>
+              <div className="user-image-message" key={`${attachment.assetId}-${attachment.fileName}`}>
                 {attachment.previewUrl ? <img src={attachment.previewUrl} alt="用户发送的图片" /> : <div className="user-image-placeholder">图片已上传</div>}
                 <span>{attachment.fileName}</span>
               </div>
             ))}
+            {msg.documentAttachments?.map((attachment,index)=><div className="user-document-message" key={attachment.requestId||index}>
+              <strong>▤ {attachment.fileName}</strong><small>{attachment.error??({UPLOADING:'正在上传',UPLOADED:'已上传',PENDING:'等待处理',PARSING:'正在解析',EMBEDDING:'正在建立索引',WAITING_FOR_BUDGET:'等待额度',WAITING_FOR_RECONCILIATION:'等待用量对账',INDEXING:'正在建立索引',PROCESSING:'正在解析',READY:'索引已就绪',COMPLETED:'索引已就绪',FAILED:'处理失败'}[attachment.status]??attachment.status)}{attachment.status==='UPLOADING'&&attachment.percent!=null?` ${attachment.percent}%`:attachment.chunkCount?` · ${attachment.completedChunks??0}/${attachment.chunkCount} 片段`:''}</small>
+            </div>)}
+            {msg.attachmentPreparation&&<div className="msg-hint" role="status">{msg.attachmentPreparation.error??'正在准备附件…'}{msg.attachmentPreparation.state!=='preparing'&&onRetryAttachments&&<button type="button" onClick={()=>onRetryAttachments(msg.id)}>重试附件</button>}</div>}
             {msg.content && <div className="bubble">{msg.content}</div>}
           </>
         ) : (

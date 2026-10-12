@@ -1,23 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type {
-  ChatEvent,
   ChatMsg,
   Conversation,
-  EndReason,
-  ImageAttachment,
-  ImageJobEventData,
   ImageJobRef,
-  SceneCardEventData,
-  SessionInfoData,
   Settings,
-  ToolCallFailedData,
-  ToolCallItem,
-  ToolCallResultData,
-  ToolCallStartedData,
 } from '../types';
-import { EVENT } from '../types';
 import {
-  streamChat,
   fetchConversationImageJobs,
   fetchImageJob,
   uploadImageAsset,
@@ -34,10 +22,11 @@ import {
 } from '../lib/storage';
 import type { PushToast } from './useToasts';
 import { executionApi, ExecutionApiError, isExecutionActive, type ExecutionView } from '../api/executions';
-import { readModelStatus, providerLabel } from '../lib/modelStatus';
 import { loadExecutionRecovery, saveExecutionRecovery, type ExecutionRecovery } from '../lib/executionRecovery';
 import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/executionRunner';
-import type { DocumentConversation } from '../api/documents';
+import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
+import { attachmentQuestion, imageReference, isImageFile, validateAttachments } from '../lib/attachments';
+import { getWallet, isInArrears } from '../lib/billing';
 
 interface BusyInfo {
   convId: string;
@@ -51,16 +40,6 @@ interface ActiveRun {
   requestStop: () => void;
   disconnect?: () => void;
 }
-
-/** DATA 增量用 rAF 节流提交，避免逐条高频 setState。 */
-const RAF =
-  typeof requestAnimationFrame !== 'undefined'
-    ? requestAnimationFrame
-    : (cb: () => void) => window.setTimeout(cb, 16);
-const CAF =
-  typeof cancelAnimationFrame !== 'undefined'
-    ? cancelAnimationFrame
-    : (id: number) => window.clearTimeout(id);
 
 interface UseConversationsOptions {
   settings: Settings;
@@ -105,7 +84,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
    * returns. Keep them keyed by message id so a late async update cannot turn
    * an already visible image into a blank placeholder.
    */
-  const attachmentPreviewRef = useRef(new Map<string, string>());
+  const attachmentPreviewRef = useRef(new Map<string, string[]>());
+  const pendingFilesRef=useRef(new Map<string,File[]>());
 
   const restoreAttachmentPreviews = (items: Conversation[]) =>
     items.map((conversation) => ({
@@ -114,8 +94,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         if (!message.attachments?.length) return message;
         const previewUrl = attachmentPreviewRef.current.get(message.id);
         if (!previewUrl) return message;
-        const attachments = message.attachments.map((attachment) =>
-          attachment.previewUrl ? attachment : { ...attachment, previewUrl },
+        const attachments = message.attachments.map((attachment,index) =>
+          attachment.previewUrl ? attachment : { ...attachment, previewUrl:previewUrl[index] },
         );
         return { ...message, attachments };
       }),
@@ -125,8 +105,9 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     messages.forEach((message) => {
       const previewUrl = attachmentPreviewRef.current.get(message.id);
       if (!previewUrl) return;
-      URL.revokeObjectURL(previewUrl);
+      previewUrl.forEach(url=>URL.revokeObjectURL(url));
       attachmentPreviewRef.current.delete(message.id);
+      pendingFilesRef.current.delete(message.id);
     });
   };
 
@@ -156,8 +137,9 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     executionObservers.current.clear();
     imagePollersRef.current.forEach((timer) => window.clearInterval(timer));
     imagePollersRef.current.clear();
-    attachmentPreviewRef.current.forEach((previewUrl) => URL.revokeObjectURL(previewUrl));
+    attachmentPreviewRef.current.forEach(urls=>urls.forEach(url=>URL.revokeObjectURL(url)));
     attachmentPreviewRef.current.clear();
+    pendingFilesRef.current.clear();
   }, []);
 
   /* ---------- 会话列表持久化（首帧跳过，后续防抖 260ms） ---------- */
@@ -183,8 +165,9 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     imagePollersRef.current.forEach(timer => window.clearInterval(timer));
     imagePollersRef.current.clear();
     saveConversations(listRef.current.map(c => ({ ...c, messages:c.messages.map(m => m.status==='streaming'&&!m.execution ? {...m,status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()} : m) })), scope);
-    attachmentPreviewRef.current.forEach(url => URL.revokeObjectURL(url));
+    attachmentPreviewRef.current.forEach(urls=>urls.forEach(url=>URL.revokeObjectURL(url)));
     attachmentPreviewRef.current.clear();
+    pendingFilesRef.current.clear();
     const nextConversations = restoreAttachmentPreviews(loadConversations(nextScope));
     listRef.current = nextConversations;
     activeRef.current = null;
@@ -292,7 +275,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const persistRecovery=()=>saveExecutionRecovery(ownerRef.current,recoveryRef.current);
   const patchExecution=(entry:ExecutionRecovery,view?:ExecutionView,connection='')=>{
     mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,updatedAt:Date.now(),messages:c.messages.map(m=>m.id!==entry.msgId?m:{
-      ...m,...(view?{execution:view,content:view.answer,status:isExecutionActive(view)?'streaming' as const:view.status==='FAILED'?'error' as const:view.status==='COMPLETED'?'done' as const:'stopped' as const,error:view.error??undefined,finishedAt:isExecutionActive(view)?undefined:Date.now()}:{}),executionConnection:connection,
+      ...m,...(view?{execution:view,content:view.answer,status:isExecutionActive(view)?'streaming' as const:view.status==='FAILED'?'error' as const:view.status==='COMPLETED'?'done' as const:'stopped' as const,error:view.error??undefined,finishedAt:isExecutionActive(view)?undefined:(m.finishedAt ?? Date.now())}:{}),executionConnection:connection,
     })}));
   };
   const observeDurable=(entry:ExecutionRecovery,initial?:ExecutionView,recover=true)=>{
@@ -350,7 +333,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         if(valid()) {
           const message=error instanceof Error?error.message:'执行状态暂时无法读取';
           patchExecution(entry,undefined,message);notifyRef.current(message,'err');
-          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped'})}));
+          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped',finishedAt:m.finishedAt ?? Date.now()})}));
           // Keep the original request ID for uncertain create/resume outcomes.
         }
       } finally {
@@ -380,7 +363,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:'正在提交…'};
     const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
     mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
-    const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:conv.documentConversationId?'DOCUMENT_QA':'CHAT',question:text,...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
+    const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:conv.documentConversationId?'DOCUMENT_QA':'CHAT',question:text,...(conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
     recoveryRef.current.push(entry);persistRecovery();observeDurable(entry,undefined,false);
   };
 
@@ -388,7 +371,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     if(busyRef.current)return;
     const conv=listRef.current.find(c=>c.messages.some(m=>m.id===msgId));const message=conv?.messages.find(m=>m.id===msgId);const view=message?.execution;
     let entry=recoveryRef.current.find(item=>item.msgId===msgId);
-    if(!entry&&conv&&view)entry={convId:conv.id,msgId,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
+    if(!entry&&conv&&view)entry={convId:conv.id,msgId,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,...(conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
     if(!entry)return;
     entry.stopRequested=false;
     if(view&&!isExecutionActive(view))entry.resumeRequest??={requestId:uid(),expectedVersion:view.version,additionalRounds:4,...(instruction?.trim()?{instruction:instruction.trim()}: {})};
@@ -404,381 +387,126 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
   };
 
-  /* ---------- 发送（SSE 状态机） ---------- */
-  const send = (raw: string, file?: File, kind:'image'|'chat'='image') => {
-    const text = raw.trim();
-    if ((!text && !file) || busyRef.current) return;
-    if(!file){sendTextExecution(text);return;}
+  /* Attachments are prepared under the same account epoch as durable work. */
+  const insertTurn=(text:string,files:File[],creation=false)=>{
+    let conv=listRef.current.find(c=>c.id===activeRef.current);
+    const now=Date.now();
+    if(!conv){conv={id:uid(),title:deriveTitle(text),messages:[],createdAt:now,updatedAt:now};applyActive(conv.id);activeRef.current=conv.id;}
+    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:creation?undefined:'正在上传附件…'};
+    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now};
+    const urls:string[]=[];
+    user.attachments=files.filter(isImageFile).map(file=>{const previewUrl=URL.createObjectURL(file);urls.push(previewUrl);return {assetId:'pending-'+uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,previewUrl};});
+    user.documentAttachments=files.filter(file=>!isImageFile(file)).map(file=>({requestId:uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,status:'UPLOADING',percent:0}));
+    if(!creation)user.attachmentPreparation={state:'preparing',assistantId:assistant.id};
+    if(urls.length)attachmentPreviewRef.current.set(user.id,urls);
+    pendingFilesRef.current.set(user.id,files);
+    const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
+    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
+    return {convId:conv.id,user,assistant};
+  };
 
-    let convId = activeRef.current ?? '';
-    const exists = listRef.current.some((c) => c.id === convId);
-    if (!exists) {
-      convId = uid();
-      applyActive(convId);
-    }
-
-    const now = Date.now();
-    const localPreviewUrl = file ? URL.createObjectURL(file) : undefined;
-    const userMsg: ChatMsg = {
-      id: uid(),
-      role: 'user',
-      content: text,
-      createdAt: now,
-      attachments: file ? [{ assetId: 'pending', fileName: file.name, mimeType: file.type, fileSize: file.size, previewUrl: localPreviewUrl }] : undefined,
-    };
-    const asstMsg: ChatMsg = {
-      id: uid(),
-      role: 'assistant',
-      content: '',
-      status: 'streaming',
-      createdAt: now + 1,
-      startedAt: now,
-    };
-    if (localPreviewUrl) attachmentPreviewRef.current.set(userMsg.id, localPreviewUrl);
-
-    // 注入用户消息 + 空助手消息（同时承担新会话的首次创建）
-    setConversations((ls) => {
-      const has = ls.some((c) => c.id === convId);
-      const conv: Conversation = {
-        id: convId,
-        title: deriveTitle(text || '图片创作'),
-        messages: [userMsg, asstMsg],
-        createdAt: now,
-        updatedAt: now,
-      };
-      return has
-        ? ls.map((c) =>
-            c.id === convId
-              ? {
-                  ...c,
-                  title: c.title === '新对话' ? deriveTitle(text || '图片创作') : c.title,
-                  messages: [...c.messages, userMsg, asstMsg],
-                  updatedAt: now,
-                }
-              : c,
-          )
-        : [conv, ...ls];
-    });
-
-    const epoch = scopeEpoch.current;
-    const convId2 = convId;
-    const asstId = asstMsg.id;
-    const controller = new AbortController();
-
-    let settled = false;
-    let stopRequested = false;
-    let sawStop = false;
-
-    /** 定向更新当前助手消息（其它消息/会话保持引用不变，利于 memo） */
-    const patchAsst = (fn: (m: ChatMsg) => ChatMsg) =>
-      setConversations((ls) => epoch!==scopeEpoch.current ? ls :
-        ls.map((c) =>
-          c.id !== convId2
-            ? c
-            : { ...c, messages: c.messages.map((m) => (m.id === asstId ? fn(m) : m)) },
-        ),
-      );
-
-    const patchUser = (attachment: ImageAttachment) =>
-      setConversations((ls) => epoch!==scopeEpoch.current ? ls : ls.map((c) => c.id !== convId2 ? c : {
-        ...c,
-        messages: c.messages.map((m) => {
-          if (m.id !== userMsg.id) return m;
-          const previewUrl = m.attachments?.[0]?.previewUrl
-            ?? attachment.previewUrl
-            ?? attachmentPreviewRef.current.get(m.id);
-          if (previewUrl) attachmentPreviewRef.current.set(m.id, previewUrl);
-          return {
-            ...m,
-            attachments: [{ ...attachment, ...(previewUrl ? { previewUrl } : {}) }],
-          };
-        }),
-      }));
-
-    /* --- DATA 增量：缓冲区 + rAF 节流提交 --- */
-    let textBuf = '';
-    let rafId: number | null = null;
-    const commitText = (delta: string) => patchAsst((m) => ({ ...m, content: m.content + delta }));
-    const flushText = () => {
-      if (rafId != null) {
-        CAF(rafId);
-        rafId = null;
-      }
-      if (textBuf) {
-        const d = textBuf;
-        textBuf = '';
-        commitText(d);
-      }
-    };
-    const pushText = (delta: string) => {
-      textBuf += delta;
-      if (rafId == null) {
-        rafId = RAF(() => {
-          rafId = null;
-          const d = textBuf;
-          textBuf = '';
-          if (d) commitText(d);
-        });
-      }
-    };
-
-    /* --- 直播字段写入 --- */
-    const addToolStarted = (d: ToolCallStartedData) =>
-      patchAsst((m) => ({
-        ...m,
-        toolCalls: [
-          ...(m.toolCalls ?? []),
-          {
-            localId: uid(),
-            toolCallId: d.toolCallId || '',
-            toolName: d.toolName,
-            argumentsRaw: d.arguments,
-            status: 'running' as const,
-          } satisfies ToolCallItem,
-        ],
-      }));
-
-    /** 更新最后一张匹配条件的工具卡片（RESULT/FAILED 只带 toolName，按最近一张 running 匹配） */
-    const updateToolBy = (
-      find: (t: ToolCallItem) => boolean,
-      patch: (t: ToolCallItem) => ToolCallItem,
-    ) =>
-      patchAsst((m) => {
-        const calls = m.toolCalls ?? [];
-        let idx = -1;
-        for (let i = calls.length - 1; i >= 0; i--) {
-          if (find(calls[i])) {
-            idx = i;
-            break;
-          }
-        }
-        if (idx < 0) return m;
-        const next = calls.slice();
-        next[idx] = patch(next[idx]);
-        return { ...m, toolCalls: next };
-      });
-
-    const finishToolResult = (d: ToolCallResultData) =>
-      updateToolBy(
-        (t) => t.status === 'running' && t.toolName === d.toolName,
-        (t) => ({ ...t, status: 'ok' as const, result: d.result }),
-      );
-
-    const finishToolFailed = (d: ToolCallFailedData) =>
-      updateToolBy(
-        (t) => t.status === 'running' && t.toolName === d.toolName,
-        (t) => ({ ...t, status: 'failed' as const, error: d.error }),
-      );
-
-    const setSessionInfo = (d: SessionInfoData | null) => {
-      // 防御：SESSION_INFO 的 eventData 理论上是对象，跨端异常时按 null 处理
-      if (d && typeof d.conversationId === 'string' && d.conversationId) {
-        patchAsst((m) => (m.conversationId ? m : { ...m, conversationId: d.conversationId }));
-      }
-    };
-
-    /**
-     * 统一收尾：刷新文本缓冲 → 更新状态/结束原因 → 中断仍在运行的卡片 → 复位按钮。
-     * 1002(STOP) 与 1004(ERROR) 均为终结信号，其余路径也走这里。
-     */
-    const finish = (
-      status: ChatMsg['status'],
-      opts: { error?: string; endReason: EndReason } = { endReason: 'stop' },
-    ) => {
-      if (settled) return;
-      settled = true;
-      flushText();
+  const prepareAttachments=(convId:string,userId:string,assistantId:string,retry=false)=>{
+    const epoch=scopeEpoch.current,controller=new AbortController(),api=documentApi(settingsRef.current.baseUrl);
+    const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
+    let transferred=false;
+    const patchUser=(fn:(message:ChatMsg)=>ChatMsg)=>{if(valid())mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?fn(m):m)}));};
+    const progress=(message:string)=>{if(valid())mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===assistantId?{...m,executionConnection:message}:m)}));};
+    const failed=(message:string,stopped=false)=>{
       if(epoch!==scopeEpoch.current)return;
-      patchAsst((m) => {
-        const calls = m.toolCalls ?? [];
-        const hasRunning = calls.some((t) => t.status === 'running');
-        return {
-          ...m,
-          status,
-          finishedAt: Date.now(),
-          error: opts.error,
-          endReason: opts.endReason,
-          toolCalls: hasRunning
-            ? calls.map((t) => (t.status === 'running' ? { ...t, status: 'stopped' as const } : t))
-            : calls,
+      mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:{state:stopped?'stopped':'failed',assistantId,error:message}}:m.id===assistantId?{...m,status:stopped?'stopped':'error',error:message,executionConnection:undefined,finishedAt:Date.now()}:m)}));
+      if(busyRef.current?.msgId===assistantId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
+    };
+    busyRef.current={convId,msgId:assistantId};setBusy(busyRef.current);
+    activeRunRef.current={convId,msgId:assistantId,disconnect:()=>controller.abort(),requestStop:()=>{controller.abort();failed('附件准备已停止，已上传文档可重试；未上传文件需重新选择。',true);}};
+    patchUser(m=>({...m,attachmentPreparation:{state:'preparing',assistantId}}));
+    void(async()=>{
+      try {
+        const current=listRef.current.find(c=>c.id===convId)!.messages.find(m=>m.id===userId)!;
+        const files=pendingFilesRef.current.get(userId)??[],imageFiles=files.filter(isImageFile),docFiles=files.filter(file=>!isImageFile(file));
+        const images=[...(current.attachments??[])];
+        for(let i=0;i<images.length;i++) {
+          if(!images[i].assetId.startsWith('pending-'))continue;
+          if(!imageFiles[i])throw new Error('图片尚未上传，请重新选择文件并发送。');
+          progress(`正在上传图片 ${i+1}/${images.length}…`);
+          const uploaded=await uploadImageAsset(imageFiles[i],settingsRef.current.baseUrl,controller.signal);
+          if(!valid())return;
+          images[i]={...uploaded,previewUrl:images[i].previewUrl};patchUser(m=>({...m,attachments:[...images]}));
+        }
+        const documents=[...(current.documentAttachments??[])];
+        const updateDocument=(i:number,doc:DocumentView)=>{
+          documents[i]={...documents[i],documentId:doc.documentId,status:doc.indexStatus==='PENDING'?doc.status:doc.indexStatus,completedChunks:doc.completedChunks,chunkCount:doc.chunkCount,error:doc.error??undefined};
+          patchUser(m=>({...m,documentAttachments:[...documents]}));
         };
-      });
-      setConversations((ls) =>
-        ls.map((c) => (c.id === convId2 ? { ...c, updatedAt: Date.now() } : c)),
-      );
-      busyRef.current = null;
-      setBusy(null);
-      activeRunRef.current = null;
-      if (activeRef.current !== convId2) {
-        notifyRef.current(status === 'error' ? `「${deriveTitle(text, 10)}」回答出错` : '后台会话已结束');
-      }
-    };
-
-    /**
-     * 停止本次生成：
-     * 直接中断浏览器流；后端会按连接异常保存已生成的部分消息。
-     */
-    const requestStop = () => {
-      if (settled || stopRequested) return;
-      stopRequested = true;
-      controller.abort();
-    };
-
-    activeRunRef.current = { convId: convId2, msgId: asstId, requestStop };
-    busyRef.current = { convId: convId2, msgId: asstId };
-    setBusy({ convId: convId2, msgId: asstId });
-
-    /** 后端事件分派。思考过程和工具事件只用于兼容旧协议，不渲染到界面。 */
-    const onLiveEvent = (e: ChatEvent) => {
-      if(epoch!==scopeEpoch.current)return;
-      switch (e.eventType) {
-        case EVENT.DATA:
-          if (typeof e.eventData === 'string' && e.eventData) pushText(e.eventData);
-          break;
-        case EVENT.ANSWER_REPLACE: {
-          const data=e.eventData as {payload?:{text?:unknown}} | null;
-          if(typeof data?.payload?.text==='string'){
-            if(rafId!=null){CAF(rafId);rafId=null;}
-            textBuf='';patchAsst(m=>({...m,content:data.payload!.text as string}));
+        for(let i=0;i<documents.length;i++) {
+          let doc:DocumentView;
+          if(documents[i].documentId) {
+            doc=await api.get(documents[i].documentId!,controller.signal);if(!valid())return;
+            if(retry&&['FAILED','PAUSED','WAITING_FOR_BUDGET','WAITING_FOR_RECONCILIATION'].some(status=>status===doc.indexStatus||status===doc.status))doc=await api.retry(doc.documentId,controller.signal);
+          } else {
+            if(!docFiles[i])throw new Error('文档尚未上传，请重新选择文件并发送。');
+            progress(`正在上传文档 ${i+1}/${documents.length}…`);
+            doc=await uploadDocument(docFiles[i],documents[i].requestId,settingsRef.current.baseUrl,controller.signal,percent=>{if(valid()){documents[i]={...documents[i],percent};patchUser(m=>({...m,documentAttachments:[...documents]}));}});
           }
-          break;
-        }
-        case EVENT.MODEL_STATUS: {
-          const data=e.eventData as {generationVersion?:number;payload?:unknown} | null;
-          const status=readModelStatus(data?.payload);
-          if(status&&Number.isInteger(data?.generationVersion))patchAsst(m=>
-            (m.modelStatus?.generationVersion??0)>(data!.generationVersion as number)?m:
-              {...m,modelStatus:{...status,generationVersion:data!.generationVersion}});
-          break;
-        }
-        case EVENT.FALLBACK_STARTED: {
-          const data=e.eventData as {payload?:unknown}|null;
-          const status=readModelStatus(data?.payload);
-          notifyRef.current(status?`${providerLabel(status.provider)}兜底模型正在接手`:'主回答服务暂时不可用，备用模型正在接手');
-          break;
-        }
-        case EVENT.REASONING: {
-          // 思考过程只兼容旧协议，产品界面不保存也不展示。
-          break;
-        }
-        case EVENT.TOOL_CALL_STARTED: {
-          const d = e.eventData as ToolCallStartedData | null;
-          if (d && typeof d.toolName === 'string') addToolStarted(d);
-          break;
-        }
-        case EVENT.TOOL_CALL_RESULT: {
-          const d = e.eventData as ToolCallResultData | null;
-          if (d && typeof d.toolName === 'string' && typeof d.result === 'string')
-            finishToolResult(d);
-          break;
-        }
-        case EVENT.TOOL_CALL_FAILED: {
-          const d = e.eventData as ToolCallFailedData | null;
-          if (d && typeof d.toolName === 'string' && typeof d.error === 'string')
-            finishToolFailed(d);
-          break;
-        }
-        case EVENT.USAGE:
-          break;
-        case EVENT.SESSION_INFO:
-          setSessionInfo(e.eventData as SessionInfoData);
-          break;
-        case EVENT.IMAGE_JOB: {
-          const d = e.eventData as ImageJobEventData | null;
-          if (d && typeof d.jobId === 'string' && d.jobId) {
-            const job: ImageJobRef = { jobId: d.jobId, status: d.status, mode: d.mode, createdAt: d.createdAt };
-            patchJob(convId2, asstId, job);
-            watchImageJob(convId2, asstId, d.jobId);
+          if(!valid())return;updateDocument(i,doc);
+          let polled=false;
+          while(!['READY','COMPLETED','SUCCEEDED','INDEXED'].includes(doc.indexStatus)) {
+            if(['FAILED','DELETED','PAUSED','WAITING_FOR_BUDGET','WAITING_FOR_RECONCILIATION'].some(status=>status===doc.indexStatus||status===doc.status))throw new Error(doc.error||`${doc.filename} 处理未完成（${doc.indexStatus}），可点击消息中的“重试附件”。`);
+            progress(`正在解析并建立索引：${doc.filename} · ${doc.completedChunks}/${doc.chunkCount} 片段；索引与概要共用免费 Token。`);
+            if(polled)await cancellableDelay(1500,controller.signal);polled=true;
+            doc=await api.get(doc.documentId,controller.signal);if(!valid())return;updateDocument(i,doc);
           }
-          break;
         }
-        case EVENT.SCENE_CARD: {
-          const d = e.eventData as SceneCardEventData | null;
-          if (d && typeof d.summary === 'string') patchAsst((m) => ({ ...m, sceneCard: d }));
-          break;
+        if(!valid())return;
+        const conversation=listRef.current.find(c=>c.id===convId)!;
+        let context:DocumentConversation|undefined;
+        if(documents.length) {
+          const ids=[...new Set([...(conversation.documentIds??[]),...documents.map(doc=>doc.documentId!)])];
+          progress('正在准备文档问答上下文…');context=await api.createConversation(ids,controller.signal);if(!valid())return;
+          // Background document summary/index calls use the same wallet lock.
+          let wallet=await getWallet(settingsRef.current.baseUrl,controller.signal);
+          while(valid()&&(wallet.activeUsageId||wallet.blocked)&&!isInArrears(wallet)) {
+            progress('文档处理仍占用账户额度，正在等待可用后发起问答…');await cancellableDelay(1500,controller.signal);wallet=await getWallet(settingsRef.current.baseUrl,controller.signal);
+          }
+          if(isInArrears(wallet))throw new Error('账户已欠费，请充值后重试文档问答。');
         }
-        case EVENT.WAITING_FOR_INSTRUCTION:
-          patchAsst((m) => ({ ...m, waitingForInstruction: true }));
-          break;
-        case EVENT.STOP:
-          sawStop = true;
-          finish(stopRequested ? 'stopped' : 'done', {
-            endReason: stopRequested ? 'stopped_by_user' : 'stop',
-          });
-          break;
-        case EVENT.ERROR: {
-          const text =
-            typeof e.eventData === 'string' && e.eventData ? e.eventData : '未知错误';
-          finish('error', { error: text, endReason: 'error' });
-          break;
-        }
-        default:
-          // 未知 / 预留事件（如 1003 PARAM）：安全忽略，不中断流
-          break;
-      }
-    };
-
-    const run = (async () => {
-      if (file && kind === 'image') {
-        try {
-          const result = await generateImage(settingsRef.current.baseUrl,file,text,controller.signal);
-          patchAsst(m => ({...m,zineRequestId:result.requestId,zineResult:result,content:'图片创作已完成。'}));
-          finish('done',{endReason:'stop'});
-        } catch(cause) {
-          if(epoch!==scopeEpoch.current)return;
-          const message = controller.signal.aborted ? '已停止等待。已受理的消费可能需要对账，请到用户页查看余额和生成回执。' : cause instanceof Error ? cause.message : '生成结果暂时无法读取，请到用户页恢复回执';
-          finish(controller.signal.aborted?'stopped':'error',{error:message,endReason:controller.signal.aborted?'stopped_by_user':'error'});
-          notifyRef.current(message,'err',{label:'查看账户',on:()=>openSettingsRef.current()});
-        }
-        return;
-      }
-      let uploadedAttachment: ImageAttachment | undefined;
-      if (file) {
-        try {
-          uploadedAttachment = await uploadImageAsset(file, settingsRef.current.baseUrl, controller.signal);
-          patchUser({ ...uploadedAttachment, previewUrl: localPreviewUrl });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : '照片上传失败';
-          finish('error', { error: message, endReason: 'error' });
-          return;
-        }
-      }
-
-      if(epoch!==scopeEpoch.current||controller.signal.aborted){finish('stopped',{endReason:'aborted'});return;}
-      const res = await streamChat({
-        question: text,
-        sessionId: convId2, // 会话 id 即后端 sessionId，对话/停止/历史/清空统一携带
-        baseUrl: settingsRef.current.baseUrl,
-        attachments: uploadedAttachment ? [uploadedAttachment] : undefined,
-        signal: controller.signal,
-        onEvent: onLiveEvent,
-      });
-
-      if (epoch===scopeEpoch.current && !settled) {
-        if (res.kind === 'error') {
-          // 请求前就失败（HTTP 非 200 / 网络不可达）
-          finish('error', { error: res.message, endReason: 'error' });
-          notifyRef.current(res.message ?? '连接后端失败', 'err', {
-            label: '查看账户',
-            on: () => openSettingsRef.current(),
-          });
-        } else if (res.kind === 'timeout') {
-          // 流空闲超时（60s 无数据，本地兜底断连）
-          finish('stopped', { endReason: 'aborted' });
-          notifyRef.current(res.message ?? '连接空闲超时，已自动中断', 'err');
-        } else if (sawStop) {
-          finish(stopRequested ? 'stopped' : 'done', {
-            endReason: stopRequested ? 'stopped_by_user' : 'stop',
-          });
-        } else {
-          // 流关闭但既无 1002 也无 1004：连接异常中断
-          const userStopped = stopRequested;
-          finish('stopped', { endReason: userStopped ? 'stopped_by_user' : 'aborted' });
-          if (!userStopped) notifyRef.current('连接中断，已保留已生成的部分内容', 'err');
-        }
+        if(!valid())return;
+        const refs=images.length?images.map(imageReference):conversation.imageAttachments;
+        mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
+        const scoped=context?.conversationId??conversation.documentConversationId;
+        const entry:ExecutionRecovery={convId,msgId:assistantId,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:current.content,...(scoped?{documentConversationId:scoped}:{conversationId:convId}),...(refs?.length?{attachments:refs.map(imageReference)}:{})}};
+        recoveryRef.current.push(entry);persistRecovery();pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
+      } catch(cause) {
+        if(valid()){const message=cause instanceof Error?cause.message:'附件准备失败，请重试';failed(message);notifyRef.current(message,'err');}
+      } finally {
+        if(!transferred&&epoch===scopeEpoch.current&&busyRef.current?.msgId===assistantId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
       }
     })();
-    void run;
+  };
+
+  const retryAttachments=(userId:string)=>{
+    if(busyRef.current)return;
+    const conv=listRef.current.find(c=>c.messages.some(m=>m.id===userId)),message=conv?.messages.find(m=>m.id===userId);
+    if(conv&&message?.attachmentPreparation)prepareAttachments(conv.id,userId,message.attachmentPreparation.assistantId,true);
+  };
+
+  const send=(raw:string,input?:File|File[],kind:'image'|'chat'='chat')=>{
+    const files=Array.isArray(input)?input:input?[input]:[];
+    if((!raw.trim()&&!files.length)||busyRef.current)return false;
+    const reason=validateAttachments(files,kind);if(reason){notifyRef.current(reason,'err');return false;}
+    const text=attachmentQuestion(raw,files,kind);
+    if(!files.length){sendTextExecution(text);return true;}
+    const turn=insertTurn(text,files,kind==='image');
+    if(kind==='chat'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id);return true;}
+    const epoch=scopeEpoch.current,controller=new AbortController();
+    busyRef.current={convId:turn.convId,msgId:turn.assistant.id};setBusy(busyRef.current);
+    activeRunRef.current={convId:turn.convId,msgId:turn.assistant.id,requestStop:()=>controller.abort(),disconnect:()=>controller.abort()};
+    const patch=(changes:Partial<ChatMsg>)=>{if(epoch===scopeEpoch.current)mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,...changes}:m)}));};
+    void(async()=>{
+      try {const result=await generateImage(settingsRef.current.baseUrl,files[0],text,controller.signal);patch({zineRequestId:result.requestId,zineResult:result,content:'图片创作已完成。',status:'done',finishedAt:Date.now()});}
+      catch(cause){if(epoch!==scopeEpoch.current)return;const message=controller.signal.aborted?'已停止等待。已受理的消费可能需要对账，请到用户页查看生成回执。':cause instanceof Error?cause.message:'生成结果暂时无法读取，请到用户页恢复回执';patch({status:controller.signal.aborted?'stopped':'error',error:message,finishedAt:Date.now()});notifyRef.current(message,'err');}
+      finally{pendingFilesRef.current.delete(turn.user.id);if(epoch===scopeEpoch.current&&busyRef.current?.msgId===turn.assistant.id){busyRef.current=null;setBusy(null);activeRunRef.current=null;}}
+    })();
+    return true;
   };
 
   /* ---------- 停止 ---------- */
@@ -800,8 +528,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    setConversations((ls) => [c, ...ls]);
-    applyActive(c.id);
+    mutateExecutionConversations(ls=>[c,...ls]);
+    applyActive(c.id);activeRef.current=c.id;
   };
 
   const removeConversation = (id: string) => {
@@ -824,7 +552,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     if (!conv || busyRef.current) return;
     releaseAttachmentPreviews(conv.messages);
     const nextId=uid();
-    mutateExecutionConversations(ls=>ls.map(c=>c.id===conv.id?{...c,id:nextId,messages:[],documentConversationId:undefined,documentIds:undefined,indexVersions:undefined,updatedAt:Date.now()}:c));
+    mutateExecutionConversations(ls=>ls.map(c=>c.id===conv.id?{...c,id:nextId,messages:[],imageAttachments:undefined,documentConversationId:undefined,documentIds:undefined,indexVersions:undefined,updatedAt:Date.now()}:c));
     recoveryRef.current=recoveryRef.current.filter(entry=>entry.convId!==conv.id);persistRecovery();
     applyActive(nextId);activeRef.current=nextId;
     notifyRef.current('已清空当前会话');
@@ -842,5 +570,6 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     clearContext,
     resumeExecution,
     setDocumentContext,
+    retryAttachments,
   };
 }

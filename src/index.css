@@ -3228,3 +3228,20 @@ h4.md-h {
 .composer-billing-note button { border:0; padding:0; color:var(--ink); background:transparent; text-decoration:underline; font:inherit; cursor:pointer; }
 .account-panel :focus-visible, .account-tabs :focus-visible, .code-input-row :focus-visible { outline:2px solid var(--ink); outline-offset:3px; }
 @media(max-width:640px) { .account-columns { grid-template-columns:1fr; gap:8px; } .wallet-values { grid-template-columns:repeat(2,minmax(0,1fr)); } .account-section-heading { align-items:flex-start; } .account-section { padding:16px 0; } .usage-table th,.usage-table td { padding:10px 8px; } .setup-guide { max-height:92dvh; overflow:auto; } .composer-hint span { display:none; } }
+
+.composer-attachments{display:flex;flex-wrap:wrap;gap:6px}.composer-attachment-error{color:#b33939;font-size:12px;margin:6px 0}.composer-file-help{display:block;font-size:11px;opacity:.7;margin-top:8px;line-height:1.5}.user-document-message{display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:8px;max-width:420px;overflow-wrap:anywhere}.user-document-message small{opacity:.7}.msg-hint button{margin-left:10px;border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--surface);color:inherit;cursor:pointer}
+
+/* Codex-style allowance overview */
+.wallet-overview { margin:18px 0 14px; padding:22px 24px; border:1px solid var(--line-strong); border-radius:20px; background:var(--surface-2); }
+.wallet-quota + .wallet-quota { margin-top:26px; }
+.wallet-quota-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.wallet-quota-heading h4 { margin:0; color:var(--ink); font-size:14px; font-weight:600; }
+.wallet-quota-heading > span { color:var(--ink-2); font-size:12px; white-space:nowrap; }
+.wallet-quota > p { margin:8px 0 11px; color:var(--ink-2); font-size:12px; line-height:1.5; font-variant-numeric:tabular-nums; }
+.wallet-quota strong { color:var(--ink); font-size:22px; font-weight:550; letter-spacing:-.025em; }
+.wallet-meter { height:7px; overflow:hidden; border-radius:99px; background:var(--line-strong); }
+.wallet-meter > span { display:block; height:100%; border-radius:inherit; background:var(--ink); }
+.wallet-quota small, .wallet-legacy { display:block; margin-top:9px; color:var(--ink-2); font-size:12px; line-height:1.6; }
+.wallet-cash-details { display:flex; flex-wrap:wrap; justify-content:space-between; gap:0 16px; }
+.wallet-legacy { margin-top:18px; }
+@media(max-width:520px) { .wallet-overview { padding:18px 16px; border-radius:16px; }.wallet-quota-heading { gap:8px; }.wallet-quota strong { font-size:20px; } }

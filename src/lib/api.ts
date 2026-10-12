@@ -198,6 +198,7 @@ export async function uploadImageAsset(file: File, baseUrl: string, signal?: Abo
     throw new Error(message || `获取图片上传策略失败（${policyResponse.status}）`);
   }
   const policy = (await policyResponse.json()) as UploadPolicyResponse;
+  signal?.throwIfAborted();
   const form = new FormData();
   Object.entries(policy.fields).forEach(([key, value]) => form.append(key, value));
   form.append('file', file, file.name);
@@ -219,6 +220,7 @@ export async function uploadImageAsset(file: File, baseUrl: string, signal?: Abo
     throw new Error(message || `图片上传 OSS 失败（${uploaded.status}）`);
   }
 
+  signal?.throwIfAborted();
   const completed = await csrfFetch(baseUrl, `/api/image-assets/${encodeURIComponent(policy.assetId)}/complete`, {
     method: 'POST',
     credentials: 'include',

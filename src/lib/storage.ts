@@ -43,10 +43,11 @@ export function loadConversations(scope = 'guest'): Conversation[] {
         ...c,
         // 旧版本在非安全 HTTP 环境下可能生成 id-时间戳-随机串；迁移后再发送时必须使用 UUID。
         id: UUID_PATTERN.test(c.id) ? c.id : uid(),
-        messages: Array.isArray(c.messages) ? c.messages.map(message =>
-          message.status === 'streaming' && !message.execution
-            ? { ...message, status: 'stopped' as const, endReason: 'aborted' as const, finishedAt: Date.now() }
-            : message) : [],
+        messages: Array.isArray(c.messages) ? c.messages.map(message => ({
+          ...message,
+          ...(message.status==='streaming'&&!message.execution?{status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()}:{}),
+          ...(message.attachmentPreparation?.state==='preparing'?{attachmentPreparation:{...message.attachmentPreparation,state:'stopped' as const,error:'附件准备已中断，已上传文档可重试；未上传文件需重新选择。'}}:{}),
+        })) : [],
       }));
   } catch {
     return [];
@@ -59,6 +60,7 @@ export function saveConversations(list: Conversation[], scope = 'guest'): void {
     // 避免把过期地址留在 localStorage，也避免把可访问链接长期留在本地。
     const snapshot = list.map((conversation) => ({
       ...conversation,
+      imageAttachments:conversation.imageAttachments?.map(({assetId,fileName,mimeType,fileSize})=>({assetId,fileName,mimeType,fileSize})),
       messages: conversation.messages.map((message) => ({
         ...message,
         attachments: message.attachments?.map(({ previewUrl: _previewUrl, ...attachment }) => attachment),

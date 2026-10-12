@@ -72,7 +72,7 @@ test('free tokens never bypass debt, reservations or unresolved usage', () => {
     assert.match(generationBlockReason({ ...free, activeUsageId: 'pending' }, capability), /对账|处理中/);
   }
   assert.equal(generationBlockReason({ ...free, freeTokens: 0, balanceMicros: 1000 }, 'CHAT'), null);
-  assert.match(generationBlockReason({ ...free, freeImages: 0 }, 'IMAGE'), /充值/);
+  assert.equal(generationBlockReason({ ...free, freeImages: 0 }, 'IMAGE'), null);
 });
 test('payment retries keep the same idempotency key, amount, channel and cookie', async () => {
   const calls = [];

@@ -20,6 +20,7 @@ export interface Usage {
   metering: string | null;
   chargedMicros: number;
   trial: boolean;
+  freeTokensUsed?:number;
   createdAt: string;
 }
 export type PaymentChannel = 'ALIPAY' | 'WECHAT';
@@ -85,10 +86,10 @@ export function generationBlockReason(
   if (wallet.blocked || wallet.activeUsageId)
     return '账户有请求处理中或待对账，请稍后再试';
   if (capability === 'IMAGE' && wallet.freeImages > 0) return null;
-  if (capability !== 'IMAGE' && (wallet.freeTokens ?? 0) > 0) return null;
+  if ((wallet.freeTokens ?? 0) > 0) return null;
   if (wallet.balanceMicros - wallet.reservedMicros <= 0)
     return capability === 'IMAGE'
-      ? '图片试用已用完，请充值后继续'
+      ? '免费 Token 与图片次数已用完，请充值后继续'
       : '免费 Token 额度已用完，请充值后继续';
   return null;
 }

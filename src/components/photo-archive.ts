@@ -1,24 +1,22 @@
 import type { LibraryBook, PhotoBookPage } from './photo-book-pages';
-import memory01 from '../assets/memory-01.jpg';
-import memory02 from '../assets/memory-02.jpg';
-import memory03 from '../assets/memory-03.jpg';
-import memory04 from '../assets/memory-04.jpg';
-import memory05 from '../assets/memory-05.jpg';
-import memory06 from '../assets/memory-06.jpg';
-
 export type PhotoArchivePhoto = {
   src: string;
   alt: string;
   filename: string;
 };
 
-/** The current backend has no public photo-archive route; use the bundled author set. */
-export async function fetchPhotoArchive(_baseUrl = '', signal?: AbortSignal): Promise<PhotoArchivePhoto[]> {
-  if (signal?.aborted) throw new DOMException('请求已取消', 'AbortError');
-  return [memory01, memory02, memory03, memory04, memory05, memory06].map((src, index) => ({
-    src,
+/** Read only the configured public author album; objects remain private in OSS. */
+export async function fetchPhotoArchive(baseUrl = '', signal?: AbortSignal): Promise<PhotoArchivePhoto[]> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/photo-archive`, { signal });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.message || body?.detail || '读取 OSS 相册失败，请稍后重试');
+  }
+  const files: { filename: string; size: number }[] = await response.json();
+  return files.map(({ filename }, index) => ({
+    src: `${baseUrl.replace(/\/$/, '')}/api/photo-archive/${encodeURIComponent(filename)}`,
     alt: `作者相册照片 ${String(index + 1).padStart(2, '0')}`,
-    filename: `memory-${String(index + 1).padStart(2, '0')}.jpg`,
+    filename,
   }));
 }
 

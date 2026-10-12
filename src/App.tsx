@@ -116,8 +116,8 @@ export default function App() {
       : (activeConv?.title ?? 'bobo');
   const send = async (
     q: string,
-    file?: File,
-    kind: 'image' | 'chat' = 'image',
+    files?: File[],
+    kind: 'image' | 'chat' = 'chat',
   ): Promise<boolean> => {
     if (!user) {
       setLoginOpen(true);
@@ -128,11 +128,10 @@ export default function App() {
     generationLock.current = true;
     try {
       await billing.check(
-        file ? (kind === 'image' ? 'IMAGE' : 'VISION') : 'CHAT',
+        kind === 'image' ? 'IMAGE' : files?.some(file=>file.type.startsWith('image/')) ? 'VISION' : 'CHAT',
       );
       if (version !== authRevision.current) return false;
-      chat.send(q, file, kind);
-      return true;
+      return chat.send(q, files, kind) !== false;
     } catch (cause) {
       push(
         cause instanceof Error ? cause.message : '暂时无法确认额度，请刷新账户',
@@ -156,9 +155,9 @@ export default function App() {
       if (version !== authRevision.current) return;
       await send(
         '请基于这张已生成图片继续二次创作。',
-        new File([blob], 'generated-remix.png', {
+        [new File([blob], 'generated-remix.png', {
           type: blob.type || 'image/png',
-        }),
+        })],
         'image',
       );
     } catch (cause) {
@@ -253,16 +252,14 @@ export default function App() {
             onGoHome={() => goto('start')}
           />
           <ChatArea
+            key={`${user?.userId ?? user?.username ?? 'guest'}:${chat.activeId ?? 'new'}`}
+            onRetryAttachments={chat.retryAttachments}
             title={title}
             messages={activeConv?.messages ?? []}
             busy={chat.busy !== null}
             baseUrl={settings.baseUrl}
             signedIn={Boolean(user)}
             onSend={send}
-            accountScope={`${settings.baseUrl}:${user?.userId ?? user?.username ?? 'guest'}`}
-            documentContextId={activeConv?.documentConversationId}
-            documentIds={activeConv?.documentIds}
-            onDocumentContext={chat.setDocumentContext}
             onResume={(id, instruction) => void resumeExecution(id, instruction)}
             onStop={chat.stop}
             onClear={chat.clearContext}

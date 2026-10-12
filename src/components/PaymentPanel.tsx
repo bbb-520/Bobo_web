@@ -165,6 +165,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
         return;
       }
     }
+    const version = epoch.current;
     lock.current = true;
     setBusy(true);
     setError('');
@@ -179,12 +180,12 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
         pending.key,
         request.signal,
       );
-      if (!request.signal.aborted) {
+      if (!request.signal.aborted && version === epoch.current) {
         save({ ...pending, orderId: next.id });
         accept(next);
       }
     } catch (cause) {
-      if (!request.signal.aborted)
+      if (!request.signal.aborted && version === epoch.current)
         setError(
           cause instanceof Error
             ? cause.message
@@ -192,8 +193,10 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
         );
     } finally {
       requests.current.delete(request);
-      lock.current = false;
-      if (!request.signal.aborted) setBusy(false);
+      if (version === epoch.current) {
+        lock.current = false;
+        setBusy(false);
+      }
     }
   };
   const newOrder = () => {
@@ -203,6 +206,9 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
     save(null);
     setOrder(null);
     setError('');
+    setQrError('');
+    lock.current = false;
+    setBusy(false);
     paidOrder.current = '';
   };
   return (
@@ -311,7 +317,6 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
             <button
               type="button"
               className="btn-ghost"
-              disabled={busy}
               onClick={newOrder}
             >
               {order.status === 'PAID' ? '继续充值' : '新建另一订单'}
@@ -323,7 +328,6 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
         <button
           type="button"
           className="btn-ghost"
-          disabled={busy}
           onClick={newOrder}
         >
           重新选择金额或支付方式

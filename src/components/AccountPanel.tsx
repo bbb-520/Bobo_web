@@ -7,12 +7,13 @@ import {
   type AuthUser,
   type ModelProfile,
 } from '../lib/auth';
-import { billingWarningMessage, formatMoney, formatTokens, FREE_TOKEN_ALLOWANCE, getUsage, isInArrears, type Usage, type Wallet } from '../lib/billing';
+import { billingWarningMessage, formatMoney, formatTokens, getUsage, isInArrears, type Usage, type Wallet } from '../lib/billing';
 import { listImageReceipts } from '../lib/zine';
 import EmailCodeFields from './EmailCodeFields';
 import PaymentPanel from './PaymentPanel';
 import ZineResultCard from './ZineResultCard';
 import AdminPanel from './AdminPanel';
+import WalletOverview from './WalletOverview';
 interface Props {
   user: AuthUser;
   baseUrl: string;
@@ -119,44 +120,14 @@ export default function AccountPanel({
             刷新账户
           </button>
         </div>
-        <div className="wallet-values">
-          <div className="token-allowance">
-            <span>免费 Token 剩余</span>
-            <strong>{wallet ? `${formatTokens(wallet.freeTokens ?? 0)} Token` : '—'}</strong>
-            <small className="hint">新用户额度 {formatTokens(FREE_TOKEN_ALLOWANCE)} Token</small>
-          </div>
-          <div>
-            <span>可用余额</span>
-            <strong>
-              {wallet
-                ? `¥${formatMoney(wallet.balanceMicros - wallet.reservedMicros)}`
-                : '—'}
-            </strong>
-          </div>
-          <div>
-            <span>账户余额</span>
-            <strong>
-              {wallet ? `¥${formatMoney(wallet.balanceMicros)}` : '—'}
-            </strong>
-          </div>
-          <div>
-            <span>冻结金额</span>
-            <strong>
-              {wallet ? `¥${formatMoney(wallet.reservedMicros)}` : '—'}
-            </strong>
-          </div>
-          <div>
-            <span>图片试用</span>
-            <strong>{wallet ? `${wallet.freeImages} 次` : '—'}</strong>
-          </div>
-        </div>
+        <WalletOverview wallet={wallet}/>
         <p className={isInArrears(wallet) ? 'setup-error' : 'hint'} role="status">
           {wallet && billingWarningMessage(wallet)
             ? billingWarningMessage(wallet)
             : wallet?.activeUsageId
               ? '有请求正在生成或等待对账。'
               : (wallet?.freeTokens ?? 0) > 0
-                ? '对话、识图与文档问答优先使用免费 Token，按实际输入与输出用量扣减。'
+                ? '所有模型调用共用免费 Token，包括图片创作、文档索引与概要。优先按实际输入和输出扣减；图片未返回 Token 时按图片价格折算额度。'
                 : '创作按实际用量扣费，余额不足时停止新请求。'}
         </p>
         {walletError && (
@@ -260,12 +231,12 @@ export default function AccountPanel({
                     </td>
                     <td>
                       {statusNames[row.status] ?? row.status}
-                      {row.trial && <small>{row.metering === 'TOKEN' ? '免费 Token' : '图片试用'}</small>}
+                      {row.trial && <small>{row.metering === 'TOKEN' || row.metering === 'IMAGE_TOKEN' ? '免费 Token' : '旧图片次数'}</small>}
                     </td>
                     <td>
                       {row.inputTokens ?? '未返回'} /{' '}
                       {row.outputTokens ?? '未返回'}
-                      {row.metering === 'IMAGE' && <small>按图片计费</small>}
+                      {row.metering === 'IMAGE' && <small>按图片计费</small>}{row.metering==='IMAGE_TOKEN'&&<small>图片价格折算额度（非实际 Token）</small>}{(row.freeTokensUsed??0)>0&&<small>免费额度抵扣 {formatTokens(row.freeTokensUsed!)} Token</small>}
                     </td>
                     <td>
                       {formatMoney(row.chargedMicros)}

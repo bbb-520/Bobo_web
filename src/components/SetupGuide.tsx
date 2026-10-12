@@ -127,7 +127,7 @@ export default function SetupGuide({ baseUrl, onLoggedIn, onClose }: Props) {
         <p className="setup-sub">
           {mode === 'register'
             ? '验证 QQ 邮箱，新用户注册后获得 100 万 Token 免费额度。'
-            : '登录后继续创作；对话与识图优先使用免费 Token 额度。'}
+            : '登录后继续创作；所有模型调用优先使用通用免费 Token 额度。'}
         </p>
         <div className="account-tabs" role="group" aria-label="登录方式">
           {(

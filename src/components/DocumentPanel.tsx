@@ -73,11 +73,11 @@ export default function DocumentPanel({baseUrl,accountScope,signedIn,busy,contex
       <button type="button" className="document-toggle" aria-expanded={open} onClick={()=>setOpen(value=>!value)}>文档资料 {documents.length>0&&<span>{documents.length}</span>}</button>
       <span className="document-context">{contextId?`正在依据 ${documentIds?.length??0} 份文档回答`:'上传文档，查看概要并连续追问'}</span>
       <button type="button" className="document-upload" onClick={()=>signedIn?input.current?.click():onLogin()} disabled={upload?.active}>＋ 上传文档</button>
-      <input ref={input} type="file" className="visually-hidden" accept=".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.ppt,.pptx,.html,.rtf,.odt,.epub" onChange={event=>{const file=event.target.files?.[0];event.currentTarget.value='';if(file)void startUpload(file);}}/>
+      <input ref={input} type="file" className="visually-hidden" accept=".pdf,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,.ppt,.pptx,.json,.html,.htm,.markdown,.rtf,.odt" onChange={event=>{const file=event.target.files?.[0];event.currentTarget.value='';if(file)void startUpload(file);}}/>
     </div>
     {open&&<div className="document-body">
       {!signedIn?<button onClick={onLogin}>登录后上传与阅读文档</button>:<>
-        <p className="document-help">支持 PDF、Office 和文本，每份最多 100 MiB。索引就绪后勾选文档，用下方输入框继续提问。</p>
+        <p className="document-help">支持 PDF、Office、TXT、Markdown、CSV、JSON、HTML、RTF、ODT，每份最多 100 MiB。索引与概要共用免费 Token，扫描 PDF 暂无 OCR。索引就绪后可继续提问。</p>
         {upload&&<div className="document-upload-progress" role="status"><span>{upload.file.name}</span><progress value={upload.percent} max={100}/><span>{upload.active?`${upload.percent}%${upload.percent===100?'，正在确认上传…':''}`:upload.error}</span>{upload.active?<button onClick={()=>uploadController.current?.abort()}>取消上传</button>:<><button onClick={()=>void startUpload(upload.file,upload.requestId)}>重新上传</button><button onClick={()=>setUpload(null)}>关闭</button></>}</div>}
         {documents.length===0&&!upload&&<p className="document-empty">还没有文档，上传后可查看处理进度。</p>}
         <ul className="document-list">{documents.map(doc=><li key={doc.documentId}>

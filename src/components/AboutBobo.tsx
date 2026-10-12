@@ -15,7 +15,7 @@ function ModeIcon({ view }: { view: View }) {
 }
 
 function DomeGallerySurface({ images }: { images: { src: string; alt: string }[] }) {
-  return <div className="gallery-surface dome-gallery-surface"><DomeGallery images={images} grayscale={false} /></div>;
+  return <div className="gallery-surface dome-gallery-surface"><DomeGallery images={images} grayscale={false} overlayBlurColor="#ffffff" /></div>;
 }
 
 interface Props {
@@ -99,7 +99,7 @@ export default function AboutBobo({ onBack, onStart, baseUrl = '' }: Props) {
               <div className="world-book"><BoboFlipbook book={archiveBook ?? undefined} /></div>
             ) : view === 'ring' ? (
               <div className="gallery-surface circular-gallery-surface">
-                <CircularGallery items={circularGalleryItems} bend={3} textColor="#ffffff" borderRadius={0.05} scrollEase={0.02} fontUrl="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" font="bold 30px Orbitron" />
+                <CircularGallery items={circularGalleryItems} bend={3} textColor="#263128" borderRadius={0.05} scrollEase={0.02} fontUrl="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" font="bold 30px Orbitron" />
               </div>
             ) : (
               <DomeGallerySurface images={domeGalleryImages} />

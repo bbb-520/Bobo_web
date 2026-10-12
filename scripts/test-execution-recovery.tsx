@@ -101,3 +101,17 @@ test('resume sends durable optimistic version and adds four rounds without creat
  assert.equal(requests.filter(item=>item.url==='/api/agent-executions').length,1);
  assert.equal(state.conversations[0].messages.at(-1).content,'resumed');
 });
+
+test('replaying a terminal receipt preserves the persisted completion time',async()=>{
+ const {saveConversations,saveActiveSessionId}=await import('../src/lib/storage');
+ const {saveExecutionRecovery}=await import('../src/lib/executionRecovery');
+ const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ saveConversations([{id,title:'timing',createdAt:1000,updatedAt:2500,messages:[{id:'a1',role:'assistant',content:'done',createdAt:1001,startedAt:1000,finishedAt:2500,status:'done',execution:view({status:'COMPLETED'})}]}],'owner');
+ saveActiveSessionId(id,'owner');
+ saveExecutionRecovery('owner',[{convId:id,msgId:'a1',executionId:'e1',request:{requestId:'r1',type:'CHAT',question:'question',conversationId:id},lastSeq:4}]);
+ globalThis.fetch=async(url)=>String(url).includes('image-jobs')?response([]):response(view({status:'COMPLETED',answer:'done',lastSeq:7}));
+ mount();await flush();
+ const message=state.conversations[0].messages[0];
+ assert.equal(message.startedAt,1000);assert.equal(message.finishedAt,2500);
+ assert.equal(message.status,'done');
+});

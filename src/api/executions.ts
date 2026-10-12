@@ -1,9 +1,10 @@
 import { apiUrl, csrfFetch } from '../lib/http';
+import type { ImageAttachment } from '../types';
 import { readModelStatus, type ModelStatus } from '../lib/modelStatus';
 
-export interface Source { id:string; documentId:string; chunkId:string; title:string; page:number|null; excerpt:string; }
+export interface Source { id:string; kind?:'IMAGE'|'DOCUMENT'; documentId:string|null; chunkId:string; title:string; page:number|null; excerpt:string; }
 export type ExecutionStatus = 'QUEUED'|'RUNNING'|'STOPPING'|'COMPLETED'|'FAILED'|'STOPPED'|'WAITING_FOR_BUDGET'|'WAITING_FOR_RECONCILIATION'|'NEEDS_INPUT';
-export interface ExecutionRequest { requestId:string; type:'CHAT'|'DOCUMENT_QA'|'AGENT'; question:string; conversationId?:string; documentConversationId?:string; }
+export interface ExecutionRequest { requestId:string; type:'CHAT'|'DOCUMENT_QA'|'AGENT'; question:string; conversationId?:string; documentConversationId?:string; attachments?:ImageAttachment[]; }
 export interface ExecutionView {
   executionId:string; requestId:string; type:ExecutionRequest['type']; status:ExecutionStatus;
   version:number; lastSeq:number; question:string; answer:string; sources:Source[]; error:string|null;

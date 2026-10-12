@@ -20,7 +20,10 @@
     "test:executions": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-executions.mjs scripts/test-execution-recovery.tsx",
     "test:documents": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-documents.mjs scripts/test-document-ui.tsx",
     "test:rbac": "node --import=tsx --test scripts/test-rbac-http.mjs scripts/test-rbac-ui.tsx",
-    "test:payment-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-payment-recovery.tsx"
+    "test:payment-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-payment-recovery.tsx",
+    "test:photo-archive": "node --test scripts/test-photo-archive.mjs",
+    "test:unified-chat": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-unified-chat.tsx",
+    "test:ui-polish": "node --import=tsx --test scripts/test-ui-polish.tsx"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",

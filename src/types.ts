@@ -77,6 +77,11 @@ export interface ImageAttachment {
   previewUrl?: string;
 }
 
+export interface DocumentAttachment {
+  documentId?:string;requestId:string;fileName:string;mimeType:string;fileSize:number;
+  status:string;percent?:number;completedChunks?:number;chunkCount?:number;error?:string;
+}
+
 export interface ImageJobEventData {
   jobId: string;
   status: ImageJobStatus;
@@ -152,6 +157,8 @@ export interface ChatMsg {
   finishedAt?: number;
   /** 用户上传图片的元数据，不保存二进制或 data URL。 */
   attachments?: ImageAttachment[];
+  documentAttachments?:DocumentAttachment[];
+  attachmentPreparation?:{state:'preparing'|'failed'|'stopped';error?:string;assistantId:string};
   /** 后台图片任务，仅保存任务 ID 和状态。 */
   imageJobs?: ImageJobRef[];
   sceneCard?: SceneCardEventData;
@@ -169,6 +176,7 @@ export interface Conversation {
   messages: ChatMsg[];
   createdAt: number;
   updatedAt: number;
+  imageAttachments?:ImageAttachment[];
   documentConversationId?:string;
   documentIds?:string[];
   indexVersions?:Record<string,number>|number[];

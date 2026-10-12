@@ -35,6 +35,8 @@ export default function ThoughtLine({
   working = true,
   settleAfter = 0,
   elapsed,
+  startedAt,
+  finishedAt,
   showTimer = true,
   onSettle,
   className = '',
@@ -58,6 +60,7 @@ export default function ThoughtLine({
   const workRef = useRef(null);
   const doneRef = useRef(null);
   const dsRef = useRef(0);
+  const mountedAt = useRef(Date.now());
   const prevWorking = useRef(isWorking);
   const latest = useRef({});
   latest.current = { onSettle };
@@ -113,20 +116,22 @@ export default function ThoughtLine({
     if (timerRef.current) timerRef.current.textContent = fmt(ds);
   };
   useLayoutEffect(() => {
-    if (elapsed != null) {
-      paint(Math.round(elapsed * 10));
-      return undefined;
-    }
-    if (!isWorking) return undefined;
-    const startedAt = performance.now();
-    paint(0);
+    const start = Number.isFinite(startedAt) ? startedAt : mountedAt.current;
+    const read = () => {
+      if (Number.isFinite(elapsed)) return Math.max(0, Math.round(elapsed * 10));
+      const end = Number.isFinite(finishedAt) ? finishedAt : Date.now();
+      return Math.max(0, Math.floor((end - start) / 100));
+    };
+    // A completed message without timestamps retains this mount's last reading.
+    if (isWorking || Number.isFinite(elapsed) || Number.isFinite(finishedAt)) paint(read());
+    if (!isWorking || Number.isFinite(elapsed) || Number.isFinite(finishedAt)) return undefined;
     const id = setInterval(() => {
-      const ds = Math.floor((performance.now() - startedAt) / 100);
+      const ds = read();
       paint(ds);
       if (settleAfter > 0 && ds >= Math.round(settleAfter * 10)) setAutoSettled(true);
     }, 100);
     return () => clearInterval(id);
-  }, [isWorking, elapsed, settleAfter]);
+  }, [isWorking, elapsed, startedAt, finishedAt, settleAfter]);
 
   useLayoutEffect(() => {
     const t = timerRef.current;
