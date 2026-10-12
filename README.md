@@ -198,3 +198,9 @@ npm run test:image-job-reconcile
 - 登录态使用 HttpOnly Cookie，写操作走 CSRF 双提交（`X-XSRF-TOKEN`），`fetch` 统一 `credentials: 'include'`。
 - 密钥与凭据不入库：`.env`、`secrets/`、`*.pem`、`.docker-work/` 已在 `.gitignore` 与 `.dockerignore` 中排除；示例见 `.env.example`。
 - 管理端敏感操作（授予 `SUPER_ADMIN` 等）要求二次输入密码并填写操作原因，全部写入授权审计。
+
+## 支付稳定性修复（2026-10-12）
+
+充值仅保留支付宝；移除微信入口、类型和示例配置，并拒绝恢复旧微信支付缓存。二维码支持同一订单刷新（`POST /api/payments/orders/{id}/qr`）和绘制失败后的重新绘制；刷新失败保留有效二维码，缺失时明确提示重新获取。订单 `stateVersion` / `qrVersion` 防止旧响应覆盖新状态，刷新页面继续恢复已有订单。
+
+退款超出自动恢复上限时显示“退款待人工核对，请联系管理员”，不再无限显示处理中；真实到账仍由后端确认。本次仅更新代码并提交 GitHub，没有执行生产部署或真实支付。须配合后端 V9 数据库迁移和 API 一起上线，详见 [Bobo4j 支付说明](https://github.com/bbb-520/Bobo4j#支付链路稳定性更新2026-10-12)。

@@ -23,7 +23,7 @@ export interface Usage {
   freeTokensUsed?:number;
   createdAt: string;
 }
-export type PaymentChannel = 'ALIPAY' | 'WECHAT';
+export type PaymentChannel = 'ALIPAY';
 export interface PaymentOrder {
   id: string;
   channel: PaymentChannel;
@@ -31,6 +31,11 @@ export interface PaymentOrder {
   status: string;
   qrCode: string | null;
   expiresAt: string;
+  qrVersion?: number;
+  stateVersion?: number;
+  qrUpdatedAt?: string | null;
+  lastError?: string | null;
+  reconcileState?: string;
 }
 export interface PendingPayment {
   key: string;
@@ -99,7 +104,7 @@ export function validPendingPayment(value: unknown): PendingPayment | null {
   if (
     typeof p.key !== 'string' ||
     !/^[A-Za-z0-9_.:-]{1,128}$/.test(p.key) ||
-    !['ALIPAY', 'WECHAT'].includes(p.channel) ||
+    p.channel !== 'ALIPAY' ||
     !Number.isSafeInteger(p.amountCents) ||
     p.amountCents < 1 ||
     p.amountCents > 1000000 ||
@@ -145,5 +150,7 @@ export const getPaymentOrder = (
   apiRequest(base, `/api/payments/orders/${encodeURIComponent(id)}`, {
     signal,
   });
+export const refreshPaymentQr = (base: string,id: string,signal?: AbortSignal):Promise<PaymentOrder> =>
+  apiRequest(base,`/api/payments/orders/${encodeURIComponent(id)}/qr`,{method:'POST',signal});
 export const balanceEventsUrl = (base: string) =>
   apiUrl('/api/billing/events', base);

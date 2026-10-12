@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test, before, afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
 import React, { act } from 'react';
+import QRCode from 'qrcode';
 
 let createRoot, PaymentPanel, root, host;
 before(async () => {
@@ -108,4 +109,63 @@ test('a restored order without a QR code can reset while retrying prepay',async 
   assert.equal(host.querySelector('input').disabled,false);
   assert.equal(sessionStorage.getItem('bobo.payment.v1::alice'),null);
   assert.match(host.textContent,/生成付款二维码/);
+});
+
+test('payment form offers Alipay only and ignores obsolete Wechat attempts',async () => {
+  sessionStorage.setItem('bobo.payment.v1::alice',JSON.stringify({key:'old-wx',channel:'WECHAT',amountCents:1}));
+  host=document.createElement('div');document.body.append(host);root=createRoot(host);
+  act(()=>root.render(<PaymentPanel baseUrl="" userId="alice" onPaid={()=>{}} />));await flush();
+  assert.doesNotMatch(host.textContent,/微信支付/);
+  assert.equal(host.querySelector('input').disabled,false);
+});
+
+test('failed QR rendering has an explicit same-code redraw action',async () => {
+  const original=QRCode.toCanvas;let draws=0;
+  QRCode.toCanvas=async()=>{if(++draws===1)throw new Error('canvas unavailable');};
+  try {
+    sessionStorage.setItem('bobo.payment.v1::alice',JSON.stringify({key:'qr-key',channel:'ALIPAY',amountCents:1,orderId:'qr-order'}));
+    globalThis.fetch=async()=>Response.json({id:'qr-order',channel:'ALIPAY',amountCents:1,status:'PENDING',qrCode:'https://qr.alipay.com/test',expiresAt:new Date(Date.now()+60000).toISOString()});
+    host=document.createElement('div');document.body.append(host);root=createRoot(host);
+    act(()=>root.render(<PaymentPanel baseUrl="" userId="alice" onPaid={()=>{}} />));await flush();
+    assert.match(host.textContent,/二维码.*失败/);
+    const retry=[...host.querySelectorAll('button')].find(b=>b.textContent.includes('重新绘制二维码'));
+    assert.ok(retry,'rendering errors require a redraw action even when the QR string is unchanged');
+    await act(async()=>retry.click());await flush();
+    assert.equal(draws,2);assert.doesNotMatch(host.textContent,/二维码.*失败/);
+  } finally { QRCode.toCanvas=original; }
+});
+
+test('refresh QR reuses the owned order endpoint rather than creating another order',async () => {
+  const original=QRCode.toCanvas;QRCode.toCanvas=async()=>{};const calls=[];
+  try {
+    sessionStorage.setItem('bobo.payment.v1::alice',JSON.stringify({key:'same-key',channel:'ALIPAY',amountCents:1,orderId:'same-order'}));
+    globalThis.fetch=async(url,init)=> {
+      calls.push([String(url),init?.method??'GET']);
+      return Response.json({id:'same-order',channel:'ALIPAY',amountCents:1,status:'PENDING',qrCode:'https://qr.alipay.com/'+(init?.method==='POST'?'new':'old'),expiresAt:new Date(Date.now()+60000).toISOString()});
+    };
+    host=document.createElement('div');document.body.append(host);root=createRoot(host);
+    act(()=>root.render(<PaymentPanel baseUrl="" userId="alice" onPaid={()=>{}} />));await flush();
+    const button=[...host.querySelectorAll('button')].find(b=>b.textContent==='刷新付款二维码');assert.ok(button);
+    await act(async()=>button.click());await flush();
+    assert.ok(calls.some(([url,method])=>url.endsWith('/api/payments/orders/same-order/qr')&&method==='POST'));
+    assert.ok(!calls.some(([url,method])=>url.endsWith('/api/payments/orders')&&method==='POST'));
+  } finally { QRCode.toCanvas=original; }
+});
+
+test('manual refund review has an explicit status rather than an endless processing message',async()=>{
+  await restore('REFUND_REVIEW');assert.match(host.textContent,/退款待人工核对/);
+  assert.doesNotMatch(host.textContent,/退款处理中|等待扫码支付/);
+});
+
+test('failed QR refresh keeps the previous valid QR and displays the error',async()=>{
+  const original=QRCode.toCanvas;QRCode.toCanvas=async()=>{};
+  try {
+    sessionStorage.setItem('bobo.payment.v1::alice',JSON.stringify({key:'retain-key',channel:'ALIPAY',amountCents:1,orderId:'retain-order'}));
+    globalThis.fetch=async(_url,init)=>init?.method==='POST'?Response.json({message:'渠道暂不可用'},{status:502}):Response.json({id:'retain-order',channel:'ALIPAY',amountCents:1,status:'PENDING',qrCode:'https://qr.alipay.com/retain',qrVersion:1,stateVersion:0,expiresAt:new Date(Date.now()+60000).toISOString()});
+    host=document.createElement('div');document.body.append(host);root=createRoot(host);
+    act(()=>root.render(<PaymentPanel baseUrl="" userId="alice" onPaid={()=>{}} />));await flush();
+    await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent==='刷新付款二维码').click());await flush();
+    assert.ok(host.querySelector('canvas'));assert.match(host.textContent,/渠道暂不可用/);
+    assert.match(sessionStorage.getItem('bobo.payment.v1::alice'),/retain-order/);
+  }finally{QRCode.toCanvas=original;}
 });

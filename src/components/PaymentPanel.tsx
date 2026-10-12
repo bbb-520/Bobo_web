@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import {
   createPaymentOrder,
   getPaymentOrder,
+  refreshPaymentQr,
   parseRechargeCents,
   validPendingPayment,
   type PendingPayment,
@@ -39,10 +40,12 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
   const [error, setError] = useState('');
   const [now, setNow] = useState(Date.now());
   const [qrError, setQrError] = useState('');
+  const [qrDrawVersion,setQrDrawVersion] = useState(0);
   const canvas = useRef<HTMLCanvasElement | null>(null);
   const lock = useRef(false);
   const requests = useRef(new Set<AbortController>());
   const paidOrder = useRef('');
+  const orderRef = useRef<PaymentOrder|null>(null);
   const epoch = useRef(0);
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
@@ -56,6 +59,14 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
     }
   };
   const accept = (value: PaymentOrder) => {
+    const previous=orderRef.current;
+    if(previous?.id===value.id) {
+      if((value.stateVersion??0)<(previous.stateVersion??0))return;
+      if(['PAID','REFUNDED','CLOSED','REFUND_REVIEW'].includes(previous.status)&&value.status==='PENDING')return;
+      if(previous.status==='PENDING'&&value.status==='PENDING'&&((value.qrVersion??0)<(previous.qrVersion??0)||!value.qrCode&&(value.qrVersion??0)===(previous.qrVersion??0)))
+        value={...value,qrCode:previous.qrCode,qrVersion:previous.qrVersion};
+    }
+    orderRef.current=value;
     setOrder(value);
     setError('');
     if (['PAID', 'REFUNDED'].includes(value.status) && paidOrder.current !== `${value.id}:${value.status}`) {
@@ -148,7 +159,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
     return () => {
       active = false;
     };
-  }, [order?.qrCode, order?.status, expired]);
+  }, [order?.qrCode, order?.status, expired,qrDrawVersion]);
   const create = async (e: FormEvent) => {
     e.preventDefault();
     if (lock.current) return;
@@ -173,7 +184,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
     const request = new AbortController();
     requests.current.add(request);
     try {
-      const next = await createPaymentOrder(
+      const next = pending.orderId ? await refreshPaymentQr(baseUrl,pending.orderId,request.signal) : await createPaymentOrder(
         baseUrl,
         pending.channel,
         pending.amountCents,
@@ -183,6 +194,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
       if (!request.signal.aborted && version === epoch.current) {
         save({ ...pending, orderId: next.id });
         accept(next);
+        setQrDrawVersion(value=>value+1);
       }
     } catch (cause) {
       if (!request.signal.aborted && version === epoch.current)
@@ -199,12 +211,27 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
       }
     }
   };
+  const refreshQr = async () => {
+    if(!order||lock.current||expired||order.status!=='PENDING')return;
+    const version=epoch.current;const request=new AbortController();requests.current.add(request);
+    lock.current=true;setBusy(true);setError('');
+    try {
+      const next=await refreshPaymentQr(baseUrl,order.id,request.signal);
+      if(!request.signal.aborted&&version===epoch.current){accept(next);setQrDrawVersion(value=>value+1);}
+    } catch(cause) {
+      if(!request.signal.aborted&&version===epoch.current)setError(cause instanceof Error?cause.message:'二维码刷新失败，请重试');
+    } finally {
+      requests.current.delete(request);
+      if(version===epoch.current){lock.current=false;setBusy(false);}
+    }
+  };
   const newOrder = () => {
     epoch.current++;
     requests.current.forEach((request) => request.abort());
     requests.current.clear();
     save(null);
     setOrder(null);
+    orderRef.current=null;
     setError('');
     setQrError('');
     lock.current = false;
@@ -225,7 +252,6 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
           {(
             [
               ['ALIPAY', '支付宝'],
-              ['WECHAT', '微信支付'],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -273,6 +299,8 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
               ? '充值已到账'
               : order.status === 'REFUNDING'
                 ? '退款处理中'
+                : order.status === 'REFUND_REVIEW'
+                  ? '退款待人工核对，请联系管理员'
                 : order.status === 'REFUNDED'
                   ? '已原路退款'
                   : order.status === 'CLOSED'
@@ -283,16 +311,18 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
           </strong>
           <p>
             ¥{(order.amountCents / 100).toFixed(2)} ·{' '}
-            {order.channel === 'ALIPAY' ? '支付宝' : '微信支付'}
+            支付宝
           </p>
           {order.qrCode && order.status === 'PENDING' && !expired && (
             <canvas
               ref={canvas}
               role="img"
-              aria-label={`使用${order.channel === 'ALIPAY' ? '支付宝' : '微信'}扫一扫支付 ${(order.amountCents / 100).toFixed(2)} 元`}
+              aria-label={`使用支付宝扫一扫支付 ${(order.amountCents / 100).toFixed(2)} 元`}
             />
           )}
           <small>订单 {order.id}</small>
+          {order.status==='PENDING'&&!expired&&!order.qrCode&&<p role="status">付款二维码暂不可用，请重新获取二维码。</p>}
+          {order.lastError&&<p className="hint">渠道核对提示：{order.lastError}</p>}
           {!expired && order.status === 'PENDING' && (
             <small>
               剩余{' '}
@@ -307,6 +337,8 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
             <p className="hint">已付款但未更新时，请刷新状态核对到账。</p>
           )}
           <div className="account-actions">
+            {order.status==='PENDING'&&!expired&&<button type="button" className="btn-ghost" disabled={busy} onClick={()=>void refreshQr()}>刷新付款二维码</button>}
+            {qrError&&order.qrCode&&!expired&&<button type="button" className="btn-ghost" onClick={()=>setQrDrawVersion(value=>value+1)}>重新绘制二维码</button>}
             <button
               type="button"
               className="btn-ghost"

@@ -98,10 +98,11 @@ test('payment retries keep the same idempotency key, amount, channel and cookie'
 });
 test('malformed saved attempts are rejected instead of reused for a different order', () => {
   assert.equal(
-    validPendingPayment({ key: 'ok', channel: 'WECHAT', amountCents: 100 }).key,
+    validPendingPayment({ key: 'ok', channel: 'ALIPAY', amountCents: 100 }).key,
     'ok',
   );
   for (const value of [
+    { key: 'old-wx', channel: 'WECHAT', amountCents: 100 },
     { key: 'ok', channel: 'OTHER', amountCents: 100 },
     { key: 'ok', channel: 'ALIPAY', amountCents: 1.5 },
     null,
