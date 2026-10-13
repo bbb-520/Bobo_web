@@ -283,8 +283,23 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const epoch=scopeEpoch.current,controller=new AbortController(),api=executionApi(settingsRef.current.baseUrl);
     executionObservers.current.set(entry.msgId,controller);
     const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
+    const releaseLocal=(message:string)=>{
+      if(!valid())return;
+      controller.abort();
+      if(executionObservers.current.get(entry.msgId)===controller)executionObservers.current.delete(entry.msgId);
+      patchExecution(entry,undefined,message);
+      mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped',finishedAt:m.finishedAt??Date.now()})}));
+      if(busyRef.current?.msgId===entry.msgId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
+    };
+    let observationTimer=0;
+    const touchObservation=()=>{
+      window.clearTimeout(observationTimer);
+      observationTimer=window.setTimeout(()=>releaseLocal('状态同步等待超时，已解除本页等待。请求记录已保留，可稍后恢复状态或发送新消息。'),300000);
+    };
+    touchObservation();
     const publish=(view:ExecutionView)=>{
       if(!valid())return;
+      touchObservation();
       entry.executionId=view.executionId;entry.lastSeq=view.lastSeq;persistRecovery();patchExecution(entry,view);
       if(isExecutionActive(view)) {
         busyRef.current={convId:entry.convId,msgId:entry.msgId};setBusy(busyRef.current);
@@ -293,6 +308,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const stopRequest=()=>{
       if(!valid())return;
       entry.stopRequested=true;persistRecovery();patchExecution(entry,undefined,'正在请求停止…');
+      if(!entry.executionId){releaseLocal('已停止本页等待。请求记录已保留，恢复状态后会继续请求停止。');return;}
       if(entry.executionId)void api.stop(entry.executionId,controller.signal).then(publish).catch(error=>{
         if(valid()){patchExecution(entry,undefined,'停止请求暂未确认，正在同步状态。');notifyRef.current(error instanceof Error?error.message:'停止请求失败','err');}
       });
@@ -316,7 +332,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
             await cancellableDelay(reconnectDelay(attempt++),controller.signal);
           }
         }
-        if(!view||!valid())return;
+        if(!view||!valid()){
+          // Creation may complete after local stop. Stop that exact execution without touching a newer run.
+          if(view&&entry.stopRequested&&epoch===scopeEpoch.current) {
+            entry.executionId=view.executionId;persistRecovery();
+            void api.stop(view.executionId).then(stopped=>{if(epoch===scopeEpoch.current)patchExecution(entry,stopped);}).catch(()=>{});
+          }
+          return;
+        }
         if(entry.resumeRequest) {view=await api.resume(view.executionId,entry.resumeRequest,controller.signal);entry.resumeRequest=undefined;}
         publish(view);
         if(entry.stopRequested&&isExecutionActive(view)) {
@@ -337,8 +360,9 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           // Keep the original request ID for uncertain create/resume outcomes.
         }
       } finally {
+        window.clearTimeout(observationTimer);
         if(epoch===scopeEpoch.current) {
-          executionObservers.current.delete(entry.msgId);
+          if(executionObservers.current.get(entry.msgId)===controller)executionObservers.current.delete(entry.msgId);
           if(busyRef.current?.msgId===entry.msgId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
         }
       }
@@ -409,6 +433,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const epoch=scopeEpoch.current,controller=new AbortController(),api=documentApi(settingsRef.current.baseUrl);
     const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
     let transferred=false;
+    let preparationTimer:number|undefined;
     const patchUser=(fn:(message:ChatMsg)=>ChatMsg)=>{if(valid())mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?fn(m):m)}));};
     const progress=(message:string)=>{if(valid())mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===assistantId?{...m,executionConnection:message}:m)}));};
     const failed=(message:string,stopped=false)=>{
@@ -419,6 +444,11 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     busyRef.current={convId,msgId:assistantId};setBusy(busyRef.current);
     activeRunRef.current={convId,msgId:assistantId,disconnect:()=>controller.abort(),requestStop:()=>{controller.abort();failed('附件准备已停止，已上传文档可重试；未上传文件需重新选择。',true);}};
     patchUser(m=>({...m,attachmentPreparation:{state:'preparing',assistantId}}));
+    preparationTimer=window.setTimeout(()=>{
+      if(!valid()||transferred)return;
+      const message='附件处理等待超时，已上传内容已保留。可重试附件或发送新消息。';
+      controller.abort();failed(message);notifyRef.current(message,'err');
+    },600000);
     void(async()=>{
       try {
         const current=listRef.current.find(c=>c.id===convId)!.messages.find(m=>m.id===userId)!;
@@ -463,8 +493,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           const ids=[...new Set([...(conversation.documentIds??[]),...documents.map(doc=>doc.documentId!)])];
           progress('正在准备文档问答上下文…');context=await api.createConversation(ids,controller.signal);if(!valid())return;
           // Background document summary/index calls use the same wallet lock.
+          const walletDeadline=Date.now()+210000;
           let wallet=await getWallet(settingsRef.current.baseUrl,controller.signal);
           while(valid()&&(wallet.activeUsageId||wallet.blocked)&&!isInArrears(wallet)) {
+            if(Date.now()>=walletDeadline)throw new Error('账户调用尚未恢复，已停止等待。已上传文档已保留，可稍后重试附件或发送新消息。');
             progress('文档处理仍占用账户额度，正在等待可用后发起问答…');await cancellableDelay(1500,controller.signal);wallet=await getWallet(settingsRef.current.baseUrl,controller.signal);
           }
           if(isInArrears(wallet))throw new Error('账户已欠费，请充值后重试文档问答。');
@@ -478,6 +510,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       } catch(cause) {
         if(valid()){const message=cause instanceof Error?cause.message:'附件准备失败，请重试';failed(message);notifyRef.current(message,'err');}
       } finally {
+        if(preparationTimer!==undefined)window.clearTimeout(preparationTimer);
         if(!transferred&&epoch===scopeEpoch.current&&busyRef.current?.msgId===assistantId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
       }
     })();

@@ -123,6 +123,20 @@ test('cancel during attachment preparation aborts upload and never submits an ex
  await act(async()=>release(Response.json(readyDoc)));await flush();assert.equal(executions(calls).length,0);assert.equal(state.busy,null);
 });
 
+test('ambiguous execution creation after upload times out locally and ignores a late receipt',async()=>{
+ let expire,release;const original=window.setTimeout.bind(window);
+ window.setTimeout=(callback,delay,...args)=>delay===300000?(expire=callback,12345):original(callback,delay,...args);
+ const pending=new Promise(resolve=>release=resolve);let first=true;
+ const calls=backend({fetch:(path,init)=>{if(path==='/api/agent-executions'&&first){first=false;return pending;}}});
+ try {
+  mount(<Harness/>);act(()=>state.send('summarize',[documentFile()],'chat'));await flush();await flush();
+  assert.ok(state.busy);assert.equal(typeof expire,'function');act(()=>expire());await flush();assert.equal(state.busy,null);
+  act(()=>state.send('new question'));await flush();assert.equal(executions(calls).length,2);
+  await act(async()=>release(Response.json(view({requestId:'old',type:'CHAT',question:'old'}))));await flush();
+  assert.equal(state.conversations[0].messages.at(-1).content,'附件回答');assert.equal(state.busy,null);
+ } finally {window.setTimeout=original;}
+});
+
 test('switching accounts during upload cannot publish or submit the previous account files',async()=>{
  let release,signal;const pending=new Promise(resolve=>release=resolve);
  const calls=backend({fetch:(path,init)=>{if(path==='/api/image-assets/upload-policy'){signal=init.signal;return pending;}}});mount(<Harness/>);
@@ -179,4 +193,21 @@ test('filtered citations retain canonical source IDs matching the answer instead
  assert.match(citationButtons[2].textContent,/^\[3\]/);
  act(()=>citationButtons[1].click());await flush();assert.equal(calls.length,0);assert.match(host.textContent,/图片中有两只杯子/);
  act(()=>citationButtons[0].click());await flush();assert.deepEqual(calls,['/api/documents/d1/sources/chunk-3']);assert.match(host.textContent,/目标为 42/);
+});
+
+
+test('attachment preparation timeout releases composer and late upload cannot submit',async()=>{
+ let trigger,release;
+ const original=window.setTimeout;
+ window.setTimeout=((callback,delay,...args)=>{if(delay===600000){trigger=callback;return 777;}return original(callback,delay,...args);});
+ try {
+  const pending=new Promise(resolve=>release=resolve);
+  const calls=backend({fetch:(path)=>path==='/api/documents' ? pending : undefined});
+  mount(<Harness/>);act(()=>state.send('',[documentFile()],'chat'));await flush();
+  assert.ok(state.busy);assert.equal(typeof trigger,'function','bounded preparation timer must exist');
+  act(()=>trigger());await flush();
+  assert.equal(state.busy,null);assert.match(state.conversations[0].messages.at(-1).error,/超时|过长/);
+  await act(async()=>release(Response.json(readyDoc)));await flush();
+  assert.equal(executions(calls).length,0);
+ } finally {window.setTimeout=original;}
 });

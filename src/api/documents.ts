@@ -11,10 +11,11 @@ export async function uploadDocument(file:File,requestId:string,baseUrl:string,s
     const headers=await csrfHeaders(baseUrl,{'X-Request-ID':requestId},signal);
     return new Promise((resolve,reject)=>{
     const xhr=new XMLHttpRequest();const abort=()=>xhr.abort();
-    xhr.open('POST',apiUrl('/api/documents',baseUrl));xhr.withCredentials=true;headers.forEach((value,key)=>xhr.setRequestHeader(key,value));
+    xhr.open('POST',apiUrl('/api/documents',baseUrl));xhr.timeout=120000;xhr.withCredentials=true;headers.forEach((value,key)=>xhr.setRequestHeader(key,value));
     xhr.upload.onprogress=event=>{if(event.lengthComputable)onProgress(Math.min(100,Math.round(event.loaded/event.total*100)));};
     xhr.onload=()=>{try{const value=JSON.parse(xhr.responseText);if(xhr.status<200||xhr.status>=300)reject(new ExecutionApiError(value.message||value.error||`上传失败（HTTP ${xhr.status}）`,xhr.status));else resolve(value);}catch{reject(new Error('上传结果暂时无法读取，请刷新文档列表'));}};
     xhr.onerror=()=>reject(new Error('上传连接中断，请刷新文档列表后重试'));
+    xhr.ontimeout=()=>reject(new Error('文档上传超时，请检查网络后重试'));
     xhr.onabort=()=>reject(new DOMException('上传已取消','AbortError'));
     xhr.onloadend=()=>signal?.removeEventListener('abort',abort);
     if(signal?.aborted){reject(new DOMException('上传已取消','AbortError'));return;}

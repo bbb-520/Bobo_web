@@ -98,7 +98,7 @@ export async function apiRequest<T>(
           : response.status === 402
             ? '余额不足，请充值后继续'
             : response.status === 409
-              ? '账户有请求处理中或待对账，请稍后重试'
+              ? '记录状态已变化，请刷新对应记录后重试'
               : `请求失败（HTTP ${response.status}）`;
       throw new ApiError(
         typeof message === 'string' ? message : fallback,

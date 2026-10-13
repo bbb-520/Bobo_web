@@ -26,7 +26,7 @@ export default function ExecutionDetails({msg,baseUrl,onResume}:{msg:ChatMsg;bas
     <div className="execution-status" role="status">{view&&<span>{labels[view.status]??view.status}</span>}{view?.fallback&&<span>已启用备用模型</span>}{view&&<small>已用 {view.roundsUsed}/{view.roundLimit} 轮 · {view.tokensUsed.toLocaleString()} tokens</small>}</div>
     {msg.executionConnection&&<p className="execution-connection">{msg.executionConnection}</p>}
     {view?.progress&&view.status==='RUNNING'&&<p>{view.progress}</p>}
-    {view?.status==='WAITING_FOR_RECONCILIATION'&&<p>已派发的调用结果尚未确认，继续会先查询回执。</p>}
+    {view?.status==='WAITING_FOR_RECONCILIATION'&&<p>调用结果尚未确认。后台将在执行超时后解除账户占用；旧调用不会自动重发，你可以稍后发送新消息。</p>}
     {!!view?.reservedTokens&&<p>正在执行或等待核对的调用预留了 {view.reservedTokens.toLocaleString()} tokens；这不是已确认消耗。</p>}
     {view?.status==='WAITING_FOR_BUDGET'&&<p>请确认余额和任务预算后继续。达到任务硬上限时，需要新建任务。</p>}
     {view&&view.sources.length>0&&<div className="execution-sources" aria-label="回答引用">{view.sources.map((item,index)=><button key={item.id||item.chunkId} onClick={()=>void openSource(item)}>[{/^S[1-9]\d*$/.test(item.id)?item.id:index+1}] {item.title||'文档原文'}{item.kind==='IMAGE'?' · 图片识别':item.page!=null?` · 第 ${item.page} 页`:' · 原文片段'}</button>)}</div>}

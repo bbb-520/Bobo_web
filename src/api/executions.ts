@@ -77,13 +77,23 @@ export class ExecutionApiError extends Error {
   constructor(message:string,readonly status:number) {super(message);this.name='ExecutionApiError';}
 }
 export async function jsonRequest<T>(path:string,baseUrl:string,init:RequestInit={}):Promise<T> {
-  const response=await csrfFetch(baseUrl, path,{...init,credentials:'include',headers:{...(init.body?{'Content-Type':'application/json'}:{}),...init.headers}});
+  const controller=new AbortController();
+  const abort=()=>controller.abort();
+  if(init.signal?.aborted)abort();else init.signal?.addEventListener('abort',abort,{once:true});
+  let timedOut=false;
+  const timer=setTimeout(()=>{timedOut=true;abort();},60000);
+  try {
+  const response=await csrfFetch(baseUrl, path,{...init,signal:controller.signal,credentials:'include',headers:{...(init.body?{'Content-Type':'application/json'}:{}),...init.headers}});
   if(!response.ok) {
     const body=await response.json().catch(()=>({}));
     throw new ExecutionApiError(body.message||body.detail||body.error||`请求失败（HTTP ${response.status}）`,response.status);
   }
   if(response.status===204) return undefined as T;
-  return response.json() as Promise<T>;
+  return await response.json() as T;
+  } catch(error) {
+    if(timedOut)throw new ExecutionApiError('状态请求超时，正在保留原请求记录并尝试恢复。',408);
+    throw error;
+  } finally {clearTimeout(timer);init.signal?.removeEventListener('abort',abort);}
 }
 export function executionApi(baseUrl:string) {
   const path=(id:string)=>`/api/agent-executions/${encodeURIComponent(id)}`;

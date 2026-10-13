@@ -28,6 +28,7 @@ const statusNames: Record<string, string> = {
   DISPATCHED: '生成中',
   SUCCEEDED: '已完成',
   UNKNOWN: '待对账',
+  ABANDONED: '已中断，占用已解除',
   CANCELLED: '已取消',
   REFUNDED: '已退还',
 };

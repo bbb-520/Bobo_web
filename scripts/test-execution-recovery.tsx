@@ -39,7 +39,7 @@ test('text dispatches an execution and explicit stop is remembered before create
   if(String(url).endsWith('/stop'))return response(view({status:'STOPPED'}));
   return String(url).includes('image-jobs')?response([]):response(view({status:'STOPPED'}));
  };
- mount();act(()=>state.send('question'));act(()=>state.stop());await flush();
+ mount();act(()=>state.send('question'));await flush();act(()=>state.stop());assert.equal(state.busy,null);await flush();
  const created=calls.find(([url])=>url==='/api/agent-executions');assert.ok(created);
  const submitted=JSON.parse(created[2]);assert.equal(submitted.type,'CHAT');
  await act(async()=>receipt(response(view({requestId:submitted.requestId}))));await flush();
@@ -58,6 +58,25 @@ test('payment-required creation stops immediately instead of retrying billable w
  assert.equal(state.busy,null);
  assert.match(state.conversations[0].messages.at(-1).executionConnection,/欠费/);
  assert.equal(calls.filter(([url,method])=>url==='/api/agent-executions'&&method==='POST').length,1);
+});
+
+test('healthy execution progress renews the inactivity deadline while a lost observer releases busy',async()=>{
+ const originalSet=window.setTimeout.bind(window),originalClear=window.clearTimeout.bind(window);
+ const timers=new Map();let next=90000,events;
+ window.setTimeout=(callback,delay,...args)=>{if(delay===300000){timers.set(++next,callback);return next;}return originalSet(callback,delay,...args);};
+ window.clearTimeout=id=>{timers.delete(id);originalClear(id);};
+ globalThis.fetch=async(url,init)=>{
+  const path=String(url);
+  if(path.endsWith('/events'))return new Response(new ReadableStream({start(controller){events=controller;init.signal.addEventListener('abort',()=>controller.close(),{once:true});}}));
+  if(path.includes('agent-executions'))return response(view());return response([]);
+ };
+ try {
+  mount();act(()=>state.send('long task'));await flush();
+  const before=[...timers.keys()].at(-1);assert.ok(events);assert.ok(state.busy);
+  await act(async()=>events.enqueue(new TextEncoder().encode('id: e1:1\ndata: {"executionId":"e1","seq":1,"type":"progress","generationVersion":1,"payload":{"message":"still working"}}\n\n')));await flush();
+  assert.equal(timers.has(before),false);assert.equal(timers.size,1);assert.ok(state.busy);
+  act(()=>[...timers.values()][0]());await flush();assert.equal(state.busy,null);
+ } finally {window.setTimeout=originalSet;window.clearTimeout=originalClear;}
 });
 
 test('account switch aborts subscriptions and leaves backend execution running',async()=>{
