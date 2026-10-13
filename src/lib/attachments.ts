@@ -1,7 +1,7 @@
 import type { ImageAttachment } from '../types';
 export const DOCUMENT_ACCEPT='.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.markdown,.csv,.json,.html,.htm,.rtf,.odt';
 export const IMAGE_CHAT_ACCEPT='image/jpeg,image/png,image/webp,image/gif';
-export const IMAGE_CREATION_ACCEPT=IMAGE_CHAT_ACCEPT+',image/bmp,image/tiff';
+export const IMAGE_CREATION_ACCEPT=IMAGE_CHAT_ACCEPT;
 export const CHAT_ATTACHMENT_ACCEPT=`${IMAGE_CHAT_ACCEPT},${DOCUMENT_ACCEPT}`;
 const documents=new Set(DOCUMENT_ACCEPT.split(','));
 export const isImageFile=(file:File)=>file.type.startsWith('image/');

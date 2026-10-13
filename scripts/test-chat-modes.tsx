@@ -61,6 +61,14 @@ test('new photo requests never reuse old pictures and text mode never inherits o
 for(const prompt of ['请把“生成一张图片”翻译成英文',"Translate 'generate an image of a cat' into Chinese",'请问如何生成一张图片？'])test(`quoted and tutorial request is not an imperative: ${prompt}`,async()=>{
  const {resolveChatMode}=await import('../src/lib/chatModes');assert.notEqual(resolveChatMode(prompt).mode,'image');
 });
+for(const prompt of ['画一只猫需要哪些步骤？','帮我生成一张图片的提示词','生成一张图片需要什么条件？','画一只猫可以吗？','Generate an image prompt for a cat','Draw a cat: what steps are needed?'])test(`ambiguous request stays in chat: ${prompt}`,async()=>{
+ const {resolveChatMode}=await import('../src/lib/chatModes');assert.notEqual(resolveChatMode(prompt).mode,'image');
+});
+test('image creation accepts the same reference formats as the backend',async()=>{
+ const {IMAGE_CREATION_ACCEPT,IMAGE_CHAT_ACCEPT,validateAttachments}=await import('../src/lib/attachments');
+ assert.equal(IMAGE_CREATION_ACCEPT,IMAGE_CHAT_ACCEPT);
+ for(const mime of ['image/bmp','image/tiff'])assert.ok(validateAttachments([new File(['image'],'reference.bmp',{type:mime})],'image'));
+});
 test('file and image modes enforce attachment category and allow follow-up context',async()=>{
  const {resolveChatMode}=await import('../src/lib/chatModes');
  assert.ok(resolveChatMode('分析',[],'vision').error);assert.equal(resolveChatMode('分析',[],'vision',{hasImages:true}).mode,'vision');

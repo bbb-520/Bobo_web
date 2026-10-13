@@ -55,3 +55,10 @@ assert.equal(restored[0].status,'stopped','a disconnected image stream must not 
 assert.equal(restored[0].modelStatus.provider,'GPT','keep the actual model identity on reload');
 assert.equal(restored[1].status,'streaming','durable tasks must remain available for reattachment');
 console.log('model status restoration passed');
+let persisted;
+context.localStorage.setItem=(_key,value)=>{persisted=value;};
+module.exports.saveConversations([{id,messages:[{id:'a',imageRequest:{attachments:[{assetId:'owned',previewUrl:'https://signed.example/image'}]},execution:{result:{imageUrl:'https://signed.example/output'}}}]}],'guest');
+assert.doesNotMatch(persisted,/signed\.example/,'nested provider URLs must never be persisted');
+assert.match(persisted,/owned/,'durable asset identifiers must be preserved');
+context.localStorage.setItem=()=>{throw new Error('quota exceeded');};
+assert.throws(()=>module.exports.saveConversations([{id,messages:[]}],'guest'),/保存|存储|storage/i,'storage failure must be visible before dispatch');
