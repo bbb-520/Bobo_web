@@ -19,14 +19,14 @@ afterEach(()=>{if(root){act(()=>root.unmount());root=null;}host?.remove();});
 function mount(element){host=document.createElement('div');document.body.append(host);root=createRoot(host);act(()=>root.render(element));}
 function click(text){const button=[...host.querySelectorAll('button')].find(item=>item.textContent.includes(text));assert.ok(button,text);act(()=>button.click());}
 
-test('execution displays actual model identity and does not leave stopped work running',()=>{
+test('execution hides technical metadata while preserving stopped-work recovery',()=>{
  const modelStatus={provider:'GPT',model:'gpt-4.1',state:'RUNNING',fallback:false,capability:'DOCUMENT_QA'};
- const view={executionId:'e1',requestId:'r1',type:'DOCUMENT_QA',status:'RUNNING',version:1,lastSeq:1,question:'goal',answer:'',sources:[],error:null,roundsUsed:0,roundLimit:4,tokensUsed:0,toolCalls:0,modelStatus};
+ const view={executionId:'e1',requestId:'r1',type:'DOCUMENT_QA',status:'RUNNING',version:1,lastSeq:1,question:'goal',answer:'',sources:[],error:null,roundsUsed:0,roundLimit:4,tokensUsed:163,reservedTokens:2775,fallback:true,toolCalls:0,modelStatus};
  const msg={id:'m1',role:'assistant',createdAt:1,content:'',status:'streaming',execution:view};
  mount(<ExecutionDetails msg={msg} baseUrl=""/>);
- assert.match(host.textContent,/ChatGPT/);assert.match(host.textContent,/gpt-4.1/);assert.match(host.textContent,/处理中/);
- act(()=>root.render(<ExecutionDetails msg={{...msg,status:'stopped',execution:{...view,status:'STOPPED'}}} baseUrl=""/>));
- assert.match(host.textContent,/已停止/);assert.doesNotMatch(host.textContent,/处理中/);
+ assert.doesNotMatch(host.textContent,/ChatGPT|gpt-4.1|处理中|备用模型|tokens|预留/);
+ let resumed;act(()=>root.render(<ExecutionDetails msg={{...msg,status:'stopped',execution:{...view,status:'STOPPED'}}} baseUrl="" onResume={id=>resumed=id}/>));
+ click('继续执行');assert.equal(resumed,'m1');
 });
 const doc={documentId:'d1',filename:'report.txt',status:'READY',indexStatus:'READY',summaryStatus:'COMPLETED',chunkCount:12,completedChunks:12,error:null,indexVersion:1,updatedAt:'2026-10-08T00:00:00Z'};
 
