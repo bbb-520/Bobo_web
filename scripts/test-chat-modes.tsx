@@ -25,6 +25,17 @@ test('explicit image mode can send a prompt without any reference file',()=>{
  assert.equal(host.querySelector('[aria-label="发送"]').disabled,false);assert.match(host.textContent,/文字|参考/);
 });
 
+test('input help is optional, follows the selected mode and can be dismissed with Escape or outside click',()=>{
+ mount('');const help=host.querySelector('[aria-label="输入说明"]');assert.ok(help);assert.equal(help.getAttribute('aria-expanded'),'false');
+ assert.equal(host.querySelector('[role="region"]'),null);
+ act(()=>help.click());assert.equal(help.getAttribute('aria-expanded'),'true');assert.match(host.querySelector('[role="region"]').textContent,/8 个附件/);
+ const select=host.querySelector('select');act(()=>{select.value='image';select.dispatchEvent(new Event('change',{bubbles:true}));});
+ assert.match(host.querySelector('[role="region"]').textContent,/一张参考图片/);
+ act(()=>document.dispatchEvent(new window.KeyboardEvent('keydown',{key:'Escape',bubbles:true})));
+ assert.equal(help.getAttribute('aria-expanded'),'false');assert.equal(document.activeElement,help);
+ act(()=>help.click());act(()=>document.body.dispatchEvent(new window.Event('pointerdown',{bubbles:true})));assert.equal(host.querySelector('[role="region"]'),null);
+});
+
 for(const prompt of ['帮我生成一张图片：海边日落','画一只猫','请绘制一个森林插画','生成以下场景的图片：雨夜街头','把这张照片做成一张复古海报','Generate an image of a red panda','Create a watercolor illustration of a forest']) {
  test(`explicit generation routes to IMAGE: ${prompt}`,async()=>{
   const {resolveChatMode}=await import('../src/lib/chatModes');const route=resolveChatMode(prompt,[],'chat');assert.equal(route.mode,'image');assert.equal(route.capability,'IMAGE');assert.equal(route.automatic,true);
