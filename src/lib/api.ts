@@ -3,8 +3,8 @@ import {
   type ImageAttachment,
   type ImageJobRef,
 } from '../types';
-import { imageJobResponseAction, ImageJobNotFoundError } from './imageJobPolling';
-import { apiUrl, csrfFetch } from './http';
+import { ImageJobNotFoundError } from './imageJobPolling';
+import { apiUrl, csrfFetch, apiRequest, ApiError } from './http';
 export { apiUrl } from './http';
 
 /**
@@ -237,26 +237,17 @@ export async function uploadImageAsset(file: File, baseUrl: string, signal?: Abo
 
 export async function fetchImageJob(jobId: string, baseUrl: string, signal?: AbortSignal): Promise<ImageJobView | null> {
   try {
-    const response = await csrfFetch(baseUrl, `/api/image-jobs/${encodeURIComponent(jobId)}`, {
-      credentials: 'include', signal,
-    });
-    const action = imageJobResponseAction(response.status);
-    if (action === 'missing') throw new ImageJobNotFoundError(jobId);
-    if (action === 'retry') return null;
-    const value = await response.json();
+    const value = await apiRequest<ImageJobView>(baseUrl, `/api/image-jobs/${encodeURIComponent(jobId)}`, {signal});
     return value && typeof value.jobId === 'string' ? value as ImageJobView : null;
   } catch (error) {
+    if(error instanceof ApiError&&error.status===404)throw new ImageJobNotFoundError(jobId);
     if (error instanceof ImageJobNotFoundError) throw error;
     return null;
   }
 }
 export async function fetchConversationImageJobs(conversationId: string, baseUrl: string): Promise<ImageJobView[] | null> {
   try {
-    const response = await csrfFetch(baseUrl, `/api/image-jobs?conversationId=${encodeURIComponent(conversationId)}`, {
-      credentials: 'include',
-    });
-    if (!response.ok) return null;
-    const value = await response.json();
+    const value = await apiRequest<ImageJobView[]>(baseUrl, `/api/image-jobs?conversationId=${encodeURIComponent(conversationId)}`);
     return Array.isArray(value) ? value : null;
   } catch {
     return null;

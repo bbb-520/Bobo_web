@@ -26,18 +26,26 @@ export function reconcileImageJobs(conversation: Conversation, jobs: ImageJobRef
     (index, message, current) => message.role === 'assistant' ? current : index,
     -1,
   );
+  const assigned=new Set(conversation.messages.flatMap(message=>message.imageJobs??[]).map(job=>job.jobId));
+  for(const job of jobs)if(job.requestId&&conversation.messages.some(message=>message.imageRequest?.requestId===job.requestId))assigned.add(job.jobId);
 
   return {
     ...conversation,
     messages: conversation.messages.map((message, index) => {
-      const existing = (message.imageJobs ?? [])
-        .map((job) => fresh.get(job.jobId))
-        .filter((job): job is ImageJobRef => Boolean(job));
-      if (index !== latestAssistantIndex) return { ...message, imageJobs: existing };
-      const known = new Set(existing.map((job) => job.jobId));
+      const existing = [...new Map([
+        ...(message.imageJobs ?? []).map(job=>fresh.get(job.jobId)).filter((job):job is ImageJobRef=>Boolean(job)),
+        ...jobs.filter(job=>job.requestId&&job.requestId===message.imageRequest?.requestId),
+      ].map(job=>[job.jobId,job])).values()];
+      const received=message.imageRequest&&existing.find(job=>job.requestId===message.imageRequest?.requestId);
+      const state=received?{imageRequest:{...message.imageRequest!,state:'accepted' as const},
+        status:received.status==='FAILED'?'error' as const:'done' as const,
+        content:received.status==='FAILED'?'图片生成未完成。':received.status==='SUCCEEDED'?'图片已生成。':'图片任务已受理，完成后会显示在这里。',
+        error:received.status==='FAILED'?received.error??'图片生成失败':undefined,finishedAt:message.finishedAt??Date.now()}:{};
+      if (index !== latestAssistantIndex) return { ...message,...state,imageJobs: existing };
       return {
         ...message,
-        imageJobs: [...existing, ...jobs.filter((job) => !known.has(job.jobId))],
+        ...state,
+        imageJobs: [...existing, ...jobs.filter((job) => !assigned.has(job.jobId))],
       };
     }),
   };

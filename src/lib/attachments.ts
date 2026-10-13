@@ -6,7 +6,7 @@ export const CHAT_ATTACHMENT_ACCEPT=`${IMAGE_CHAT_ACCEPT},${DOCUMENT_ACCEPT}`;
 const documents=new Set(DOCUMENT_ACCEPT.split(','));
 export const isImageFile=(file:File)=>file.type.startsWith('image/');
 export function validateAttachments(files:File[],kind:'chat'|'image'='chat'):string|null {
-  if(kind==='image'&&(files.length!==1||!isImageFile(files[0])))return '图片创作需要且仅支持一张来源图片。';
+  if(kind==='image'&&(files.length>1||files.some(file=>!isImageFile(file))))return '图片生成最多支持一张参考图片，不支持文档附件。';
   if(files.length>8)return '每条消息最多添加 8 个附件。';
   if(files.filter(isImageFile).length>3)return '每条消息最多添加 3 张图片。';
   for(const file of files) {

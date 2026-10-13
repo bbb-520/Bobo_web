@@ -23,7 +23,9 @@
     "test:payment-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-payment-recovery.tsx",
     "test:photo-archive": "node --test scripts/test-photo-archive.mjs",
     "test:unified-chat": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-unified-chat.tsx",
-    "test:ui-polish": "node --import=tsx --test scripts/test-ui-polish.tsx"
+    "test:ui-polish": "node --import=tsx --test scripts/test-ui-polish.tsx",
+    "test:chat-modes": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-chat-modes.tsx",
+    "test:image-creation": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-image-creation.tsx"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",

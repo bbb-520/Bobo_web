@@ -24,7 +24,6 @@ test('refreshes existing job in place and adds new jobs to latest assistant mess
     { jobId: 'old-job', status: 'SUCCEEDED', imageUrl: 'https://example.test/output.png' },
   ]);
   assert.deepEqual(updated.messages[1].imageJobs, [
-    { jobId: 'old-job', status: 'SUCCEEDED', imageUrl: 'https://example.test/output.png' },
     { jobId: 'new-job', status: 'QUEUED' },
   ]);
 });

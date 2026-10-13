@@ -11,7 +11,9 @@ import {
   uploadImageAsset,
 } from '../lib/api';
 import { ImageJobNotFoundError, reconcileImageJobs } from '../lib/imageJobPolling';
-import { generateImage } from '../lib/zine';
+import { imageCreationApi } from '../lib/imageCreation';
+import { ApiError } from '../lib/http';
+import { resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
 import {
   deriveTitle,
   loadActiveSessionId,
@@ -25,7 +27,7 @@ import { executionApi, ExecutionApiError, isExecutionActive, type ExecutionView 
 import { loadExecutionRecovery, saveExecutionRecovery, type ExecutionRecovery } from '../lib/executionRecovery';
 import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/executionRunner';
 import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
-import { attachmentQuestion, imageReference, isImageFile, validateAttachments } from '../lib/attachments';
+import { attachmentQuestion, imageReference, isImageFile } from '../lib/attachments';
 import { getWallet, isInArrears } from '../lib/billing';
 
 interface BusyInfo {
@@ -70,6 +72,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const openSettingsRef = useRef(openSettings);
   const activeRunRef = useRef<ActiveRun | null>(null);
   const imagePollersRef = useRef(new Map<string, number>());
+  const imageRequestsRef = useRef(new Map<string, AbortController>());
   const ownerRef = useRef(accountScope || 'guest');
   const scopeEpoch = useRef(0);
   const executionObservers = useRef(new Map<string,AbortController>());
@@ -137,6 +140,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     executionObservers.current.clear();
     imagePollersRef.current.forEach((timer) => window.clearInterval(timer));
     imagePollersRef.current.clear();
+    imageRequestsRef.current.forEach(controller=>controller.abort());
+    imageRequestsRef.current.clear();
     attachmentPreviewRef.current.forEach(urls=>urls.forEach(url=>URL.revokeObjectURL(url)));
     attachmentPreviewRef.current.clear();
     pendingFilesRef.current.clear();
@@ -163,6 +168,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     busyRef.current = null;
     setBusy(null);
     imagePollersRef.current.forEach(timer => window.clearInterval(timer));
+    imageRequestsRef.current.forEach(controller=>controller.abort());
+    imageRequestsRef.current.clear();
     imagePollersRef.current.clear();
     saveConversations(listRef.current.map(c => ({ ...c, messages:c.messages.map(m => m.status==='streaming'&&!m.execution ? {...m,status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()} : m) })), scope);
     attachmentPreviewRef.current.forEach(urls=>urls.forEach(url=>URL.revokeObjectURL(url)));
@@ -205,17 +212,19 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   }, [activeId]);
 
   const patchJob = (convId: string, msgId: string, job: ImageJobRef) => {
-    setConversations((ls) => ls.map((c) => c.id !== convId ? c : {
+    mutateExecutionConversations((ls) => ls.map((c) => c.id !== convId ? c : {
       ...c,
       messages: c.messages.map((m) => m.id !== msgId ? m : {
         ...m,
         imageJobs: [...(m.imageJobs ?? []).filter((item) => item.jobId !== job.jobId), job],
+        ...(m.imageRequest?{imageRequest:{...m.imageRequest,state:'accepted' as const},status:job.status==='FAILED'?'error' as const:'done' as const,
+          content:job.status==='FAILED'?'图片生成未完成。':job.status==='SUCCEEDED'?'图片已生成。':'图片任务已受理，完成后会显示在这里。',error:job.status==='FAILED'?job.error??'图片生成失败':undefined,finishedAt:m.finishedAt??Date.now()}:{}),
       }),
     }));
   };
 
   const removeImageJob = (convId: string, msgId: string, jobId: string) => {
-    setConversations((ls) => ls.map((c) => c.id !== convId ? c : {
+    mutateExecutionConversations((ls) => ls.map((c) => c.id !== convId ? c : {
       ...c,
       messages: c.messages.map((m) => m.id !== msgId ? m : {
         ...m,
@@ -260,13 +269,97 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const epoch = scopeEpoch.current;
     const jobs = await fetchConversationImageJobs(convId, settingsRef.current.baseUrl);
     // null means the refresh failed; retain local cards and retry on the next session refresh.
-    if (jobs === null || epoch!==scopeEpoch.current) return;
-    setConversations((ls) => ls.map((c) => {
+    if (epoch!==scopeEpoch.current) return;
+    if(jobs!==null)mutateExecutionConversations((ls) => ls.map((c) => {
       if (c.id !== convId) return c;
       return reconcileImageJobs(c, jobs);
     }));
-    const assistantId = listRef.current.find((c) => c.id === convId)?.messages.filter((m) => m.role === 'assistant').at(-1)?.id;
-    if (assistantId) jobs.filter((job) => job.status === 'QUEUED' || job.status === 'PROCESSING').forEach((job) => watchImageJob(convId, assistantId, job.jobId));
+    const conversation=listRef.current.find(c=>c.id===convId);
+    for(const message of conversation?.messages??[]) {
+      for(const job of message.imageJobs??[]) {
+        if(job.status==='QUEUED'||job.status==='PROCESSING')watchImageJob(convId,message.id,job.jobId);
+      }
+    }
+    for(const message of conversation?.messages??[]) {
+      const request=message.imageRequest;
+      if(!request||request.state==='accepted'||request.state==='failed')continue;
+      if(request.state==='uploading') {
+        mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id!==message.id?m:{...m,status:'stopped',imageRequest:{...request,state:'failed'},error:'参考图片上传已中断，请重新选择图片并发送。',finishedAt:m.finishedAt??Date.now()})}));
+      } else submitImageRequest(convId,message.id,request,true);
+    }
+  };
+
+  const imageContext=(conversation?:Conversation):ChatModeContext=>({hasImages:Boolean(conversation?.imageAttachments?.length),imageCount:conversation?.imageAttachments?.length,hasDocuments:Boolean(conversation?.documentConversationId)});
+
+  /** Persist first; a lost response is recovered with the same request ID, never a new paid job. */
+  const submitImageRequest=(convId:string,msgId:string,initial:NonNullable<ChatMsg['imageRequest']>,recover=false,source?:File,userId?:string)=>{
+    if(imageRequestsRef.current.has(msgId))return;
+    const epoch=scopeEpoch.current,controller=new AbortController(),api=imageCreationApi(settingsRef.current.baseUrl);
+    imageRequestsRef.current.set(msgId,controller);
+    const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
+    let request={...initial};
+    const patch=(changes:Partial<ChatMsg>)=>{if(epoch===scopeEpoch.current)mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===msgId?{...m,...changes}:m)}));};
+    const release=()=>{if(epoch===scopeEpoch.current&&busyRef.current?.msgId===msgId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}};
+    const submissionTimer=window.setTimeout(()=>{
+      if(!valid())return;
+      const uploading=request.state==='uploading';controller.abort();
+      patch({status:'stopped',imageRequest:{...request,state:uploading?'failed':'submitting'},error:uploading?'图片上传等待超时，请重新选择图片并发送。':'图片任务受理等待超时，刷新后会核对同一请求，请勿重复提交。',finishedAt:Date.now()});
+      if(imageRequestsRef.current.get(msgId)===controller)imageRequestsRef.current.delete(msgId);
+      release();
+    },120000);
+    if(!recover) {
+      busyRef.current={convId,msgId};setBusy(busyRef.current);
+      activeRunRef.current={convId,msgId,disconnect:()=>controller.abort(),requestStop:()=>{
+        window.clearTimeout(submissionTimer);
+        request={...request,state:'stopped',stopRequested:true};controller.abort();
+        patch({imageRequest:request,status:'stopped',error:'已停止等待。已受理的图片任务仍会继续，可刷新查看结果。',finishedAt:Date.now()});release();
+      }};
+    }
+    void(async()=>{
+      try {
+        if(source) {
+          const asset=await uploadImageAsset(source,settingsRef.current.baseUrl,controller.signal);
+          if(!valid())return;
+          request={...request,attachments:[imageReference(asset)],state:'submitting'};
+          mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?{...m,attachments:[{...asset,previewUrl:m.attachments?.[0]?.previewUrl}]}:m)}));
+          patch({imageRequest:request});
+        }
+        for(let attempt=0;attempt<3&&valid();attempt++) {
+          try {
+            let job:ImageJobRef|undefined;
+            if(recover||attempt>0) {
+              try {job=await api.byRequest(request.requestId,controller.signal);}
+              catch(cause){if(!(cause instanceof ApiError)||cause.status!==404)throw cause;}
+            }
+            if(!valid())return;
+            if(!job&&request.stopRequested){patch({status:'stopped',imageRequest:request,finishedAt:Date.now()});return;}
+            if(!job)job=await api.create({requestId:request.requestId,conversationId:request.conversationId,prompt:request.prompt,attachments:request.attachments},controller.signal);
+            if(!valid())return;
+            if(!job||typeof job.jobId!=='string')throw new Error('图片任务受理信息不完整');
+            patch({imageRequest:{...request,state:'accepted'},status:'done',error:undefined,content:'图片任务已受理，完成后会显示在这里。',finishedAt:Date.now()});
+            patchJob(convId,msgId,job);release();
+            if(job.status==='QUEUED'||job.status==='PROCESSING')watchImageJob(convId,msgId,job.jobId);
+            return;
+          } catch(cause) {
+            if(!valid())return;
+            if(cause instanceof ApiError&&[400,401,402,403,404,409,413,422].includes(cause.status))throw cause;
+            patch({status:'stopped',imageRequest:{...request,state:'submitting'},error:'正在确认图片任务是否受理，刷新后会按同一请求恢复。',finishedAt:Date.now()});release();
+            if(attempt===2)throw cause;
+            await cancellableDelay(1000*(attempt+1),controller.signal);
+          }
+        }
+      } catch(cause) {
+        if(!valid())return;
+        const uploadFailed=request.state==='uploading';
+        const definite=uploadFailed||cause instanceof ApiError&&[400,401,402,403,404,409,413,422].includes(cause.status);
+        const message=uploadFailed?'参考图片上传失败，请重新选择图片并发送。':definite&&cause instanceof Error?cause.message:'图片任务状态暂时无法确认，刷新页面将继续核对同一请求，请勿重复提交。';
+        patch({status:definite?'error':'stopped',imageRequest:{...request,state:definite?'failed':'submitting'},error:message,finishedAt:Date.now()});notifyRef.current(message,'err');
+      } finally {
+        window.clearTimeout(submissionTimer);
+        if(imageRequestsRef.current.get(msgId)===controller)imageRequestsRef.current.delete(msgId);
+        if(userId)pendingFilesRef.current.delete(userId);release();
+      }
+    })();
   };
 
   const mutateExecutionConversations=(fn:(items:Conversation[])=>Conversation[])=>{
@@ -379,15 +472,17 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[scope]);
 
-  const sendTextExecution=(text:string)=>{
+  const sendTextExecution=(text:string,selected:ChatMode='chat')=>{
     let conv=listRef.current.find(c=>c.id===activeRef.current);
     const now=Date.now();
     if(!conv) {conv={id:uid(),title:deriveTitle(text),messages:[],createdAt:now,updatedAt:now};applyActive(conv.id);activeRef.current=conv.id;}
-    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now};
-    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:'正在提交…'};
+    const route=resolveChatMode(text,[],selected,imageContext(conv));
+    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now,selectedMode:selected};
+    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:'正在提交…',mode:route.mode,automaticMode:route.automatic};
     const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
     mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
-    const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:conv.documentConversationId?'DOCUMENT_QA':'CHAT',question:text,...(conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
+    const scoped=route.useDocuments?conv.documentConversationId:undefined;
+    const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:text,...(route.useImages&&conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(scoped?{documentConversationId:scoped}:{conversationId:conv.id})}};
     recoveryRef.current.push(entry);persistRecovery();observeDurable(entry,undefined,false);
   };
 
@@ -412,12 +507,13 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   };
 
   /* Attachments are prepared under the same account epoch as durable work. */
-  const insertTurn=(text:string,files:File[],creation=false)=>{
+  const insertTurn=(text:string,files:File[],creation=false,selected:ChatMode='chat')=>{
     let conv=listRef.current.find(c=>c.id===activeRef.current);
     const now=Date.now();
     if(!conv){conv={id:uid(),title:deriveTitle(text),messages:[],createdAt:now,updatedAt:now};applyActive(conv.id);activeRef.current=conv.id;}
-    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:creation?undefined:'正在上传附件…'};
-    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now};
+    const route=resolveChatMode(text,files,selected,imageContext(conv));
+    const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:creation?undefined:'正在上传附件…',mode:route.mode,automaticMode:route.automatic};
+    const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now,selectedMode:selected};
     const urls:string[]=[];
     user.attachments=files.filter(isImageFile).map(file=>{const previewUrl=URL.createObjectURL(file);urls.push(previewUrl);return {assetId:'pending-'+uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,previewUrl};});
     user.documentAttachments=files.filter(file=>!isImageFile(file)).map(file=>({requestId:uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,status:'UPLOADING',percent:0}));
@@ -502,9 +598,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(isInArrears(wallet))throw new Error('账户已欠费，请充值后重试文档问答。');
         }
         if(!valid())return;
-        const refs=images.length?images.map(imageReference):conversation.imageAttachments;
+        const route=resolveChatMode(current.content,files,current.selectedMode??'chat',imageContext(conversation));
+        const refs=images.length?images.map(imageReference):route.useImages?conversation.imageAttachments:undefined;
         mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
-        const scoped=context?.conversationId??conversation.documentConversationId;
+        const scoped=context?.conversationId??(route.useDocuments?conversation.documentConversationId:undefined);
         const entry:ExecutionRecovery={convId,msgId:assistantId,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:current.content,...(scoped?{documentConversationId:scoped}:{conversationId:convId}),...(refs?.length?{attachments:refs.map(imageReference)}:{})}};
         recoveryRef.current.push(entry);persistRecovery();pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
       } catch(cause) {
@@ -522,23 +619,19 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     if(conv&&message?.attachmentPreparation)prepareAttachments(conv.id,userId,message.attachmentPreparation.assistantId,true);
   };
 
-  const send=(raw:string,input?:File|File[],kind:'image'|'chat'='chat')=>{
+  const send=(raw:string,input?:File|File[],kind:ChatMode='chat')=>{
     const files=Array.isArray(input)?input:input?[input]:[];
     if((!raw.trim()&&!files.length)||busyRef.current)return false;
-    const reason=validateAttachments(files,kind);if(reason){notifyRef.current(reason,'err');return false;}
-    const text=attachmentQuestion(raw,files,kind);
-    if(!files.length){sendTextExecution(text);return true;}
-    const turn=insertTurn(text,files,kind==='image');
-    if(kind==='chat'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id);return true;}
-    const epoch=scopeEpoch.current,controller=new AbortController();
-    busyRef.current={convId:turn.convId,msgId:turn.assistant.id};setBusy(busyRef.current);
-    activeRunRef.current={convId:turn.convId,msgId:turn.assistant.id,requestStop:()=>controller.abort(),disconnect:()=>controller.abort()};
-    const patch=(changes:Partial<ChatMsg>)=>{if(epoch===scopeEpoch.current)mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,...changes}:m)}));};
-    void(async()=>{
-      try {const result=await generateImage(settingsRef.current.baseUrl,files[0],text,controller.signal);patch({zineRequestId:result.requestId,zineResult:result,content:'图片创作已完成。',status:'done',finishedAt:Date.now()});}
-      catch(cause){if(epoch!==scopeEpoch.current)return;const message=controller.signal.aborted?'已停止等待。已受理的消费可能需要对账，请到用户页查看生成回执。':cause instanceof Error?cause.message:'生成结果暂时无法读取，请到用户页恢复回执';patch({status:controller.signal.aborted?'stopped':'error',error:message,finishedAt:Date.now()});notifyRef.current(message,'err');}
-      finally{pendingFilesRef.current.delete(turn.user.id);if(epoch===scopeEpoch.current&&busyRef.current?.msgId===turn.assistant.id){busyRef.current=null;setBusy(null);activeRunRef.current=null;}}
-    })();
+    const conversation=listRef.current.find(c=>c.id===activeRef.current),route=resolveChatMode(raw,files,kind,imageContext(conversation));
+    if(route.error){notifyRef.current(route.error,'err');return false;}
+    const text=attachmentQuestion(raw,files,route.kind);
+    if(route.mode!=='image'&&!files.length){sendTextExecution(text,kind);return true;}
+    const turn=insertTurn(text,files,route.mode==='image',kind);
+    if(route.mode!=='image'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id);return true;}
+    const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:turn.convId,prompt:text,
+      attachments:route.referenceFromContext?conversation?.imageAttachments?.map(imageReference):undefined,state:files.length?'uploading':'submitting'};
+    mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,imageRequest:request}:m)}));
+    submitImageRequest(turn.convId,turn.assistant.id,request,false,files[0],turn.user.id);
     return true;
   };
 

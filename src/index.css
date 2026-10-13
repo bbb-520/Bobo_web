@@ -3224,6 +3224,10 @@ h4.md-h {
 .zine-result p { font-size:13px; line-height:1.65; }
 .composer-mode { display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:12px; color:var(--ink-2); }
 .composer-mode select { min-width:0; padding:6px; border:1px solid var(--line); border-radius:8px; background:var(--surface); color:var(--ink); font:inherit; }
+.composer-mode { flex-wrap:wrap; margin-bottom:6px; }
+.composer-mode-description { margin:0 0 10px; font-size:12px; line-height:1.5; color:var(--ink-2); }
+.composer-mode-switch { font-size:11px; color:var(--ink-2); }
+.message-mode { width:fit-content; margin-bottom:10px; padding:3px 8px; border:1px solid var(--line); border-radius:6px; color:var(--ink-2); font-size:11px; line-height:1.5; }
 .composer-billing-note { padding:8px 2px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; color:var(--ink-2); font-size:12px; }
 .composer-billing-note button { border:0; padding:0; color:var(--ink); background:transparent; text-decoration:underline; font:inherit; cursor:pointer; }
 .account-panel :focus-visible, .account-tabs :focus-visible, .code-input-row :focus-visible { outline:2px solid var(--ink); outline-offset:3px; }

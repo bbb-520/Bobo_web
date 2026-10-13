@@ -8,6 +8,7 @@ import ThoughtLine from './ThoughtLine.jsx';
 import ZineResultCard from './ZineResultCard';
 import ExecutionDetails from './ExecutionDetails';
 import ModelStatusBadge from './ModelStatusBadge';
+import { MODE_LABELS } from '../lib/chatModes';
 
 export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, onOpenProfile, onRemix, onResume, onRetryAttachments }: {
   msg: ChatMsg;
@@ -62,6 +63,7 @@ export const MessageItem = memo(function MessageItem({ msg, baseUrl, signedIn, o
           </>
         ) : (
           <>
+            {msg.mode&&<div className="message-mode" aria-label="本次使用的模式">{MODE_LABELS[msg.mode]}{msg.automaticMode?' · 自动切换':''}</div>}
             {!msg.execution && <ModelStatusBadge status={msg.modelStatus} taskStatus={msg.status}/>}
             {msg.content && <div className="bubble-plain"><Markdown content={msg.content} />{isStreaming && <span className="caret" />}</div>}
             {msg.sceneCard && (

@@ -99,6 +99,7 @@ export interface SceneCardEventData {
 }
 
 export interface ImageJobRef {
+  requestId?:string|null;
   jobId: string;
   status: ImageJobStatus;
   mode?: string;
@@ -137,6 +138,10 @@ export interface ToolCallItem {
 }
 
 export interface ChatMsg {
+  selectedMode?:import('./lib/chatModes').ChatMode;
+  mode?:import('./lib/chatModes').ActualChatMode;
+  automaticMode?:boolean;
+  imageRequest?:{requestId:string;conversationId:string;prompt:string;attachments?:ImageAttachment[];state:'uploading'|'submitting'|'accepted'|'stopped'|'failed';stopRequested?:boolean};
   modelStatus?: import('./lib/modelStatus').ModelStatus;
   id: string;
   role: Role;

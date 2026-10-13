@@ -8,6 +8,7 @@ import PillNav from './PillNav';
 import type { AuthUser } from '../lib/auth';
 import type { Wallet } from '../lib/billing';
 import boboMark from '../assets/bobo-mark.svg';
+import type { ChatMode, ChatModeContext } from '../lib/chatModes';
 
 interface Props {
   title: string;
@@ -15,7 +16,8 @@ interface Props {
   busy: boolean;
   baseUrl: string;
   signedIn: boolean;
-  onSend: (q: string, files?: File[], kind?:'image'|'chat') => Promise<boolean>;
+  onSend: (q: string, files?: File[], kind?:ChatMode) => Promise<boolean>;
+  context?:ChatModeContext;
   wallet: Wallet|null;
   onStop: () => void;
   onClear: () => void;
@@ -49,6 +51,7 @@ export default function ChatArea({
   onRemix,
   onResume,
   onRetryAttachments,
+  context,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickRef = useRef(true);
@@ -123,6 +126,7 @@ export default function ChatArea({
       </div>
 
       <Composer
+        context={context}
         value={draft}
         onChange={setDraft}
         onSend={async(files,kind) => {

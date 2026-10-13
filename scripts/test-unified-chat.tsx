@@ -72,9 +72,9 @@ test('composer validates image count, file count, supported formats and per-file
  assert.equal(host.querySelectorAll('.composer-attachment').length,0);
 });
 
-test('explicit image creation requires exactly one image and disallows documents',()=>{
+test('explicit image creation accepts a prompt or one reference image and disallows documents',()=>{
  composer(async()=>true,'create');const select=host.querySelector('select');act(()=>{select.value='image';select.dispatchEvent(new Event('change',{bubbles:true}));});
- assert.equal(host.querySelector('[aria-label="发送"]').disabled,true);
+ assert.equal(host.querySelector('[aria-label="发送"]').disabled,false);
  attach([documentFile()]);assert.match(host.querySelector('[role=alert]')?.textContent??'',/图片/);
  attach([image(),image()]);assert.match(host.querySelector('[role=alert]')?.textContent??'',/1|一张/);
  attach([image()]);assert.equal(host.querySelector('[aria-label="发送"]').disabled,false);
