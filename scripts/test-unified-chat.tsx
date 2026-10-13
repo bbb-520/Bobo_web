@@ -161,11 +161,11 @@ test('image evidence citation displays extracted observations without requesting
  assert.equal(calls.length,0);assert.match(host.textContent,/图片附件识别结果（可能存在识别误差）/);assert.match(host.textContent,/照片中有两只杯子/);
 });
 
-test('unsupported image types are rejected before upload while explicit creation preserves BMP support',async()=>{
+test('unsupported image types are rejected before upload in chat and creation',async()=>{
  const {validateAttachments}=await import('../src/lib/attachments');
  assert.match(validateAttachments([new File(['svg'],'vector.svg',{type:'image/svg+xml'})],'chat')??'',/格式|支持/);
  assert.match(validateAttachments([new File(['bmp'],'photo.bmp',{type:'image/bmp'})],'chat')??'',/格式|支持/);
- assert.equal(validateAttachments([new File(['bmp'],'photo.bmp',{type:'image/bmp'})],'image'),null);
+ assert.match(validateAttachments([new File(['bmp'],'photo.bmp',{type:'image/bmp'})],'image')??'',/格式|支持/);
 });
 
 test('chat accepts text, images, docs, image-only and doc-only with the expected durable execution kind',async()=>{

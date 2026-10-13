@@ -20,6 +20,7 @@ import {
   loadConversations,
   saveActiveSessionId,
   saveConversations,
+  StoragePersistenceError,
   uid,
 } from '../lib/storage';
 import type { PushToast } from './useToasts';
@@ -29,6 +30,8 @@ import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/execu
 import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
 import { attachmentQuestion, imageReference, isImageFile } from '../lib/attachments';
 import { getWallet, isInArrears } from '../lib/billing';
+import { ConversationSync, conversationRemote } from '../lib/conversationSync';
+import { fetchAssetPreview, type AssetPreview } from '../lib/attachmentPreviews';
 
 interface BusyInfo {
   convId: string;
@@ -89,6 +92,9 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
    */
   const attachmentPreviewRef = useRef(new Map<string, string[]>());
   const pendingFilesRef=useRef(new Map<string,File[]>());
+  const cloudRef=useRef<{scope:string;sync:ConversationSync;ready:boolean}|null>(null);
+  const remotePreviews=useRef(new Map<string,AssetPreview>());
+  const removedConversations=useRef(new Set<string>());
 
   const restoreAttachmentPreviews = (items: Conversation[]) =>
     items.map((conversation) => ({
@@ -154,7 +160,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       persistReadyRef.current = true;
       return;
     }
-    const t = setTimeout(() => saveConversations(conversations, scope), 260);
+    const t = setTimeout(() => {
+      try {saveConversations(conversations, scope);}
+      catch(error) {notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
+    }, 260);
     return () => clearTimeout(t);
   }, [conversations, scope]);
 
@@ -171,10 +180,13 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     imageRequestsRef.current.forEach(controller=>controller.abort());
     imageRequestsRef.current.clear();
     imagePollersRef.current.clear();
-    saveConversations(listRef.current.map(c => ({ ...c, messages:c.messages.map(m => m.status==='streaming'&&!m.execution ? {...m,status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()} : m) })), scope);
+    try {saveConversations(listRef.current.map(c => ({ ...c, messages:c.messages.map(m => m.status==='streaming'&&!m.execution ? {...m,status:'stopped' as const,endReason:'aborted' as const,finishedAt:Date.now()} : m) })), scope);}
+    catch(error) {notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
     attachmentPreviewRef.current.forEach(urls=>urls.forEach(url=>URL.revokeObjectURL(url)));
     attachmentPreviewRef.current.clear();
     pendingFilesRef.current.clear();
+    remotePreviews.current.clear();
+    removedConversations.current.clear();
     const nextConversations = restoreAttachmentPreviews(loadConversations(nextScope));
     listRef.current = nextConversations;
     activeRef.current = null;
@@ -203,6 +215,84 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     applyActive(last);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope]);
+
+  // Remote snapshots supplement the local cache. They never authorize a model call.
+  useEffect(()=>{
+    if(scope==='guest'||scope!==ownerRef.current)return;
+    const epoch=scopeEpoch.current,controller=new AbortController();
+    const sync=new ConversationSync(conversationRemote(settingsRef.current.baseUrl),controller.signal);
+    const current={scope,sync,ready:false};cloudRef.current=current;
+    const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
+    void sync.load(()=>listRef.current).then(latest=>{
+        if(!valid())return;
+        const restored=latest.filter(c=>!removedConversations.current.has(c.id)).map(c=>({...c,messages:c.messages.map(m=>({
+          ...m,...(m.status==='streaming'&&!m.execution?{status:'stopped' as const,endReason:'aborted' as const,finishedAt:m.finishedAt??Date.now()}:{}),
+          ...(m.attachmentPreparation?.state==='preparing'?{attachmentPreparation:{...m.attachmentPreparation,state:'stopped' as const,error:'附件准备已中断，请重新选择未上传文件。'}}:{}),
+        }))}));
+        current.ready=true;listRef.current=restored;setConversations(restored);
+        try {saveConversations(restored,scope);}catch(error){notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
+        if(!activeRef.current&&restored[0]) {activeRef.current=restored[0].id;applyActive(restored[0].id);}
+        for(const conversation of restored)for(const message of conversation.messages) {
+          const view=message.execution;
+          if(!view||!isExecutionActive(view)||executionObservers.current.has(message.id))continue;
+          const entry:ExecutionRecovery={convId:conversation.id,msgId:message.id,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,conversationId:conversation.id}};
+          if(!recoveryRef.current.some(item=>item.msgId===message.id))recoveryRef.current.push(entry);
+          observeDurable(entry);
+        }
+    }).catch(error=>{if(valid())notifyRef.current(`会话同步暂不可用，本地记录仍保留：${error instanceof Error?error.message:'连接失败'}`,'err');});
+    return()=>{controller.abort();if(cloudRef.current===current)cloudRef.current=null;};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[scope]);
+
+  useEffect(()=>{
+    const cloud=cloudRef.current;
+    if(!cloud?.ready||cloud.scope!==scope||scope!==ownerRef.current)return;
+    const timer=window.setTimeout(()=>{
+      void cloud.sync.save(listRef.current).catch(error=>{
+        if(cloudRef.current!==cloud)return;
+        cloud.ready=false;
+        notifyRef.current(`会话同步已暂停，请刷新后重试；本地记录仍保留：${error instanceof Error?error.message:'连接失败'}`,'err');
+      });
+    },750);
+    return()=>window.clearTimeout(timer);
+  },[conversations,scope]);
+
+  useEffect(()=>{
+    if(!activeId||scope!==ownerRef.current)return;
+    const controller=new AbortController(),epoch=scopeEpoch.current;
+    const conversation=listRef.current.find(c=>c.id===activeId);
+    const assets=[...new Set(conversation?.messages.flatMap(m=>m.attachments??[]).filter(a=>!a.assetId.startsWith('pending-')&&!a.previewUrl?.startsWith('blob:')).map(a=>a.assetId)??[])];
+    const valid=()=>!controller.signal.aborted&&epoch===scopeEpoch.current;
+    let refreshTimer:ReturnType<typeof setTimeout>|undefined;
+    const lookup=async(assetId:string)=>{
+      const cached=remotePreviews.current.get(assetId);
+      if(cached&&Date.parse(cached.expiresAt)>Date.now()+30000)return cached;
+      try {const view=await fetchAssetPreview(assetId,settingsRef.current.baseUrl,controller.signal);if(valid())remotePreviews.current.set(assetId,view);return view;}
+      catch{return null;}
+    };
+    void (async()=>{
+      const views:(AssetPreview|null)[]=[];
+      for(let offset=0;offset<assets.length;offset+=4) {
+        if(!valid())return [];
+        views.push(...await Promise.all(assets.slice(offset,offset+4).map(lookup)));
+      }
+      return views;
+    })().then(views=>{
+      if(!valid())return;
+      const urls=new Map(views.filter((v):v is AssetPreview=>!!v).map(v=>[v.assetId,v.previewUrl]));
+      let changed=false;
+      const next=listRef.current.map(c=>c.id!==activeId?c:{...c,messages:c.messages.map(m=>({...m,attachments:m.attachments?.map(a=>{
+        const previewUrl=urls.get(a.assetId);if(!previewUrl||previewUrl===a.previewUrl)return a;
+        changed=true;return {...a,previewUrl};
+      })}))});
+      if(changed){listRef.current=next;setConversations(next);}
+      const expires=views.filter((v):v is AssetPreview=>!!v).map(v=>Date.parse(v.expiresAt));
+      if(expires.length)refreshTimer=setTimeout(()=>{
+        if(valid()){remotePreviews.current.clear();setConversations(items=>[...items]);}
+      },Math.max(30000,Math.min(...expires)-Date.now()-30000));
+    });
+    return()=>{controller.abort();if(refreshTimer)clearTimeout(refreshTimer);};
+  },[activeId,scope,conversations]);
 
   /* 图片任务状态从后端刷新，会话消息由 localStorage 持久化。 */
   useEffect(() => {
@@ -333,6 +423,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
             }
             if(!valid())return;
             if(!job&&request.stopRequested){patch({status:'stopped',imageRequest:request,finishedAt:Date.now()});return;}
+            if(!job)saveConversations(listRef.current,ownerRef.current);
             if(!job)job=await api.create({requestId:request.requestId,conversationId:request.conversationId,prompt:request.prompt,attachments:request.attachments},controller.signal);
             if(!valid())return;
             if(!job||typeof job.jobId!=='string')throw new Error('图片任务受理信息不完整');
@@ -362,10 +453,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     })();
   };
 
-  const mutateExecutionConversations=(fn:(items:Conversation[])=>Conversation[])=>{
-    const next=fn(listRef.current);listRef.current=next;setConversations(next);saveConversations(next,ownerRef.current);
+  const mutateExecutionConversations=(fn:(items:Conversation[])=>Conversation[],required=false)=>{
+    const next=fn(listRef.current);
+    try {saveConversations(next,ownerRef.current);}catch(cause){notifyRef.current(cause instanceof Error?cause.message:'保存恢复信息失败','err');if(required)throw cause;}
+    listRef.current=next;setConversations(next);
   };
-  const persistRecovery=()=>saveExecutionRecovery(ownerRef.current,recoveryRef.current);
+  const persistRecovery=(required=false)=>{
+    try {saveExecutionRecovery(ownerRef.current,recoveryRef.current);}catch(cause){notifyRef.current(cause instanceof Error?cause.message:'保存恢复信息失败','err');if(required)throw cause;}
+  };
   const patchExecution=(entry:ExecutionRecovery,view?:ExecutionView,connection='')=>{
     mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,updatedAt:Date.now(),messages:c.messages.map(m=>m.id!==entry.msgId?m:{
       ...m,...(view?{execution:view,content:view.answer,status:isExecutionActive(view)?'streaming' as const:view.status==='FAILED'?'error' as const:view.status==='COMPLETED'?'done' as const:'stopped' as const,error:view.error??undefined,finishedAt:isExecutionActive(view)?undefined:(m.finishedAt ?? Date.now())}:{}),executionConnection:connection,
@@ -416,7 +511,12 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
             if(entry.executionId)view=await api.get(entry.executionId,controller.signal);
             else if(recover) {
               try {view=await api.find(entry.request.requestId,controller.signal);}
-              catch(error){if(error instanceof ExecutionApiError&&error.status===404)view=await api.create(entry.request,controller.signal);else throw error;}
+              catch(error){
+                if(error instanceof ExecutionApiError&&error.status===404) {
+                  if(entry.stopRequested)throw new ExecutionApiError('已停止等待，未找到已受理请求，未重新提交。',404);
+                  view=await api.create(entry.request,controller.signal);
+                } else throw error;
+              }
             } else {recover=true;view=await api.create(entry.request,controller.signal);}
           } catch(error) {
             if(!valid())return;
@@ -480,10 +580,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const user:ChatMsg={id:uid(),role:'user',content:text,createdAt:now,selectedMode:selected};
     const assistant:ChatMsg={id:uid(),role:'assistant',content:'',createdAt:now+1,startedAt:now,status:'streaming',executionConnection:'正在提交…',mode:route.mode,automaticMode:route.automatic};
     const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
-    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
+    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items],true);
     const scoped=route.useDocuments?conv.documentConversationId:undefined;
     const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:text,...(route.useImages&&conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(scoped?{documentConversationId:scoped}:{conversationId:conv.id})}};
-    recoveryRef.current.push(entry);persistRecovery();observeDurable(entry,undefined,false);
+    recoveryRef.current.push(entry);try{persistRecovery(true);}catch(cause){recoveryRef.current=recoveryRef.current.filter(item=>item!==entry);throw cause;}observeDurable(entry,undefined,false);
   };
 
   const resumeExecution=(msgId:string,instruction?:string)=>{
@@ -518,10 +618,11 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     user.attachments=files.filter(isImageFile).map(file=>{const previewUrl=URL.createObjectURL(file);urls.push(previewUrl);return {assetId:'pending-'+uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,previewUrl};});
     user.documentAttachments=files.filter(file=>!isImageFile(file)).map(file=>({requestId:uid(),fileName:file.name,mimeType:file.type,fileSize:file.size,status:'UPLOADING',percent:0}));
     if(!creation)user.attachmentPreparation={state:'preparing',assistantId:assistant.id};
+    const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
+    try {mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items],true);}
+    catch(error) {urls.forEach(url=>URL.revokeObjectURL(url));throw error;}
     if(urls.length)attachmentPreviewRef.current.set(user.id,urls);
     pendingFilesRef.current.set(user.id,files);
-    const next={...conv,title:conv.title==='新对话'?deriveTitle(text):conv.title,messages:[...conv.messages,user,assistant],updatedAt:now};
-    mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items]);
     return {convId:conv.id,user,assistant};
   };
 
@@ -603,7 +704,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
         const scoped=context?.conversationId??(route.useDocuments?conversation.documentConversationId:undefined);
         const entry:ExecutionRecovery={convId,msgId:assistantId,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:current.content,...(scoped?{documentConversationId:scoped}:{conversationId:convId}),...(refs?.length?{attachments:refs.map(imageReference)}:{})}};
-        recoveryRef.current.push(entry);persistRecovery();pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
+        saveConversations(listRef.current,ownerRef.current);recoveryRef.current.push(entry);persistRecovery(true);pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
       } catch(cause) {
         if(valid()){const message=cause instanceof Error?cause.message:'附件准备失败，请重试';failed(message);notifyRef.current(message,'err');}
       } finally {
@@ -624,6 +725,8 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     if((!raw.trim()&&!files.length)||busyRef.current)return false;
     const conversation=listRef.current.find(c=>c.id===activeRef.current),route=resolveChatMode(raw,files,kind,imageContext(conversation));
     if(route.error){notifyRef.current(route.error,'err');return false;}
+    try {
+    saveConversations(listRef.current,ownerRef.current);
     const text=attachmentQuestion(raw,files,route.kind);
     if(route.mode!=='image'&&!files.length){sendTextExecution(text,kind);return true;}
     const turn=insertTurn(text,files,route.mode==='image',kind);
@@ -631,8 +734,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:turn.convId,prompt:text,
       attachments:route.referenceFromContext?conversation?.imageAttachments?.map(imageReference):undefined,state:files.length?'uploading':'submitting'};
     mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,imageRequest:request}:m)}));
+    saveConversations(listRef.current,ownerRef.current);
     submitImageRequest(turn.convId,turn.assistant.id,request,false,files[0],turn.user.id);
     return true;
+    } catch(cause) {if(cause instanceof StoragePersistenceError){notifyRef.current(cause.message,'err');return false;}throw cause;}
   };
 
   /* ---------- 停止 ---------- */
@@ -663,6 +768,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       notifyRef.current('回答进行中，请先停止再删除', 'err');
       return;
     }
+    removedConversations.current.add(id);
     const removed = listRef.current.find((conversation) => conversation.id === id);
     if (removed) releaseAttachmentPreviews(removed.messages);
     setConversations((ls) => ls.filter((c) => c.id !== id));
@@ -676,6 +782,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const clearContext = () => {
     const conv = listRef.current.find((c) => c.id === activeRef.current);
     if (!conv || busyRef.current) return;
+    removedConversations.current.add(conv.id);
     releaseAttachmentPreviews(conv.messages);
     const nextId=uid();
     mutateExecutionConversations(ls=>ls.map(c=>c.id===conv.id?{...c,id:nextId,messages:[],imageAttachments:undefined,documentConversationId:undefined,documentIds:undefined,indexVersions:undefined,updatedAt:Date.now()}:c));

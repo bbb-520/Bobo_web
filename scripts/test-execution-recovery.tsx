@@ -30,6 +30,22 @@ test('refresh restores request by ID and final snapshot without sending another 
  assert.ok(calls.every(([,method])=>method!=='POST'));
 });
 
+test('persisted stop intent never creates a missing text execution after refresh',async()=>{
+ const {saveConversations,saveActiveSessionId}=await import('../src/lib/storage');
+ const {saveExecutionRecovery}=await import('../src/lib/executionRecovery');
+ const id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ saveConversations([{id,title:'stopped',createdAt:1,updatedAt:1,messages:[{id:'a1',role:'assistant',content:'',createdAt:1,status:'stopped'}]}],'owner');saveActiveSessionId(id,'owner');
+ saveExecutionRecovery('owner',[{convId:id,msgId:'a1',stopRequested:true,request:{requestId:'r1',type:'CHAT',question:'question',conversationId:id},lastSeq:0}]);
+ const calls=[];globalThis.fetch=async(url,init)=>{
+  calls.push([String(url),init?.method??'GET']);
+  if(String(url)==='/api/agent-executions?requestId=r1')return new Response(JSON.stringify({message:'missing'}),{status:404,headers:{'Content-Type':'application/json'}});
+  return String(url).includes('agent-executions')?response(view({status:'STOPPED'})):response([]);
+ };
+ mount();await flush();await flush();
+ assert.equal(calls.filter(([url,method])=>url==='/api/agent-executions'&&method==='POST').length,0);
+ assert.equal(state.conversations[0].messages[0].status,'stopped');assert.equal(state.busy,null);
+});
+
 test('text dispatches an execution and explicit stop is remembered before create receipt arrives',async()=>{
  const calls=[];let receipt;
  const pending=new Promise(resolve=>receipt=resolve);

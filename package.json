@@ -12,6 +12,7 @@
     "start": "node server.mjs",
     "typecheck": "tsc -b --pretty false",
     "test:storage": "node scripts/test-storage-uid.mjs",
+    "test:cloud-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-conversation-sync.ts scripts/test-cloud-recovery.tsx",
     "test:image-job-404": "node --experimental-strip-types --test scripts/test-image-job-404.mjs",
     "test:image-job-reconcile": "node --experimental-strip-types --test scripts/test-image-job-reconcile.mjs",
     "test:accounts-billing": "node --import=./scripts/csrf-test-env.mjs --experimental-strip-types --test scripts/test-accounts-billing.mjs",

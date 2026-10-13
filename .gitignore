@@ -13,6 +13,3 @@ vite.config.ts.timestamp-*
 secrets/
 *.pem
 .docker-work/
-
-# Local deployment work and credentials
-.migration/

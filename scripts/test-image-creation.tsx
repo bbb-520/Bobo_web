@@ -33,6 +33,28 @@ function backend(override?) {
  };return {calls,jobs};
 }
 const creates=calls=>calls.filter(c=>c.path==='/api/image-jobs'&&c.init.method==='POST');
+test('storage failure prevents both image and chat dispatch and preserves the composer input',async()=>{
+ const {calls}=backend();mount();const original=window.Storage.prototype.setItem;
+ window.Storage.prototype.setItem=()=>{throw new Error('quota exceeded');};
+ try {
+  for(const mode of ['image','text'] as const){let sent;act(()=>{sent=state.send('a red panda',undefined,mode);});assert.equal(sent,false);}
+  await flush();assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);
+ }finally{window.Storage.prototype.setItem=original;}
+});
+
+test('quota reached only when saving the new turn blocks text, image and document work',async()=>{
+ const {calls}=backend();mount();const original=window.Storage.prototype.setItem;
+ window.Storage.prototype.setItem=function(key,value){
+  if(String(key).startsWith('travel-agent.conversations.')&&JSON.parse(value).some(c=>c.messages.length))throw new Error('quota reached by new message');
+  return original.call(this,key,value);
+ };
+ try {
+  let sent;act(()=>{sent=state.send('hello',undefined,'text');});assert.equal(sent,false);
+  act(()=>{sent=state.send('a red panda',undefined,'image');});assert.equal(sent,false);
+  act(()=>{sent=state.send('summarize',[new File(['document'],'notes.txt',{type:'text/plain'})],'document');});assert.equal(sent,false);
+  await flush();assert.equal(calls.some(c=>c.init.method==='POST'),false);assert.equal(state.busy,null);
+ }finally{window.Storage.prototype.setItem=original;}
+});
 
 test('explicit text request starts a durable image task, marks mode and releases browser busy',async()=>{
  const {calls,jobs}=backend();mount();act(()=>state.send('帮我生成一张图片：海边日落'));await flush();await flush();

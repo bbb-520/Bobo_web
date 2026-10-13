@@ -16,6 +16,8 @@ export const MODE_LABELS: Record<ActualChatMode,string> = {text:'文本聊天',v
 export function requestsImageGeneration(text: string): boolean {
   const value=text.trim();
   if(!value)return false;
+  // Auto routing is a chargeable action: questions and requests for instructions/prompts stay in chat.
+  if(/[?？]|(?:提示词|步骤|教程|原理|需要.{0,12}(?:条件|准备|什么)|如何|怎样|怎么)|\b(?:prompt|steps?|tutorial|how|requirements?)\b/i.test(value))return false;
   const instruction=value.split(/[：:\n]/,1)[0];
   const direct=instruction.replace(/^(?:(?:请你|请|麻烦你|麻烦|劳驾|帮我|帮忙|给我|我想要你|我希望你|我想要|我想)[，,\s]*)+/,'').replace(/^(?:(?:please|help me|could you|can you|would you|I want you to|I would like you to)\s+)+/i,'');
   if(/^(?:解释|介绍|分析|总结|讨论|告诉|教我|说说|回答)/.test(direct))return false;

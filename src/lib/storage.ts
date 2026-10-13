@@ -8,6 +8,15 @@ const ACTIVE_SESSION_KEY = 'travel-agent.activeSessionId.v1';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+export class StoragePersistenceError extends Error {
+  constructor(cause: unknown) {
+    super('浏览器存储不可用或空间不足，未能保存恢复信息。请释放空间后重试。');
+    this.storageCause=cause;
+    this.name='StoragePersistenceError';
+  }
+  readonly storageCause: unknown;
+}
+
 function fallbackUuid(): string {
   const bytes = new Uint8Array(16);
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
@@ -68,9 +77,10 @@ export function saveConversations(list: Conversation[], scope = 'guest'): void {
         zineResult: undefined, // Keep only the receipt ID; restore short-lived provider URLs from the owner API.
       })),
     }));
-    localStorage.setItem(scopedKey(CONV_KEY, scope), JSON.stringify(snapshot));
-  } catch {
-    /* 存储满/隐私模式时忽略 */
+    localStorage.setItem(scopedKey(CONV_KEY, scope), JSON.stringify(snapshot,(key,value)=>
+      ['previewUrl','imageUrl','zineResult'].includes(key)?undefined:value));
+  } catch (cause) {
+    throw new StoragePersistenceError(cause);
   }
 }
 
