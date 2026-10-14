@@ -15,6 +15,11 @@ interface Props {
   onWidthChange?: (width: number) => void;
   /** 回到开始页（Landing） */
   onGoHome?: () => void;
+  hasMore?:boolean;
+  loadingMore?:boolean;
+  syncError?:string;
+  onLoadEarlier?:()=>void;
+  onRetrySync?:()=>void;
 }
 
 const MIN_WIDTH = 200;
@@ -30,6 +35,7 @@ export default function Sidebar({
   onOpenSettings,
   onWidthChange,
   onGoHome,
+  hasMore,loadingMore,syncError,onLoadEarlier,onRetrySync,
 }: Props) {
   const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -99,6 +105,8 @@ export default function Sidebar({
             </span>
           </div>
         ))}
+        {hasMore&&<button type="button" className="sb-new" disabled={loadingMore} onClick={onLoadEarlier}>{loadingMore?'正在加载…':'加载更早会话'}</button>}
+        {syncError&&<div role="status"><p>会话同步暂不可用，本地记录仍保留。</p><button type="button" className="sb-new" disabled={loadingMore} onClick={onRetrySync}>重试同步</button></div>}
       </div>
 
       <div className="sb-foot">

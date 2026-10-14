@@ -30,7 +30,7 @@ import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/execu
 import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
 import { attachmentQuestion, imageReference, isImageFile } from '../lib/attachments';
 import { getWallet, isInArrears } from '../lib/billing';
-import { ConversationSync, conversationRemote } from '../lib/conversationSync';
+import { ConversationSync, conversationRemote, applySyncRecovery } from '../lib/conversationSync';
 import { fetchAssetPreview, type AssetPreview } from '../lib/attachmentPreviews';
 
 interface BusyInfo {
@@ -65,6 +65,11 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const [conversations, setConversations] = useState<Conversation[]>(() => loadConversations(accountScope || 'guest'));
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState<BusyInfo | null>(null);
+  const [historyLimit,setHistoryLimit]=useState(20);
+  const [historyLoading,setHistoryLoading]=useState(false);
+  const [historyHasMore,setHistoryHasMore]=useState(false);
+  const [syncError,setSyncError]=useState('');
+  const historyBusyRef=useRef(false);
 
   // 最新值镜像：供异步闭包 / mount 期 effect 读取，避免 stale closure
   const listRef = useRef(conversations);
@@ -92,7 +97,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
    */
   const attachmentPreviewRef = useRef(new Map<string, string[]>());
   const pendingFilesRef=useRef(new Map<string,File[]>());
-  const cloudRef=useRef<{scope:string;sync:ConversationSync;ready:boolean}|null>(null);
+  const cloudRef=useRef<{scope:string;sync:ConversationSync;ready:boolean;retry:()=>Promise<void>}|null>(null);
   const remotePreviews=useRef(new Map<string,AssetPreview>());
   const removedConversations=useRef(new Set<string>());
 
@@ -187,6 +192,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     pendingFilesRef.current.clear();
     remotePreviews.current.clear();
     removedConversations.current.clear();
+    setHistoryLimit(20);setHistoryHasMore(false);setHistoryLoading(false);setSyncError('');historyBusyRef.current=false;
     const nextConversations = restoreAttachmentPreviews(loadConversations(nextScope));
     listRef.current = nextConversations;
     activeRef.current = null;
@@ -218,20 +224,34 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
 
   // Remote snapshots supplement the local cache. They never authorize a model call.
   useEffect(()=>{
-    if(scope==='guest'||scope!==ownerRef.current)return;
+    if(scope==='guest'||scope.endsWith(':guest')||scope!==ownerRef.current)return;
     const epoch=scopeEpoch.current,controller=new AbortController();
-    const sync=new ConversationSync(conversationRemote(settingsRef.current.baseUrl),controller.signal);
-    const current={scope,sync,ready:false};cloudRef.current=current;
     const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
-    void sync.load(()=>listRef.current).then(latest=>{
+    const sync=new ConversationSync(conversationRemote(settingsRef.current.baseUrl),controller.signal,{
+      storageKey:`travel-agent.sync-baselines.v1.${encodeURIComponent(scope)}`,
+      onRecovered:change=>{
+        if(!valid())return;
+        const recovered=applySyncRecovery(listRef.current,change);
+        listRef.current=recovered;setConversations(recovered);
+        try {saveConversations(recovered,scope);}catch(error){setSyncError(error instanceof Error?error.message:'本地记录保存失败');}
+        if(activeRef.current===change.id&&change.remote.deleted){const next=change.copy?.id??recovered[0]?.id;activeRef.current=next??null;setActiveId(next??null);if(next)saveActiveSessionId(next,scope);}
+        notifyRef.current(change.copy?'云端会话已更新，你的编辑已保留为本地冲突副本。':'已恢复云端最新会话。','info');
+      },
+    });
+    const current={scope,sync,ready:false,retry:async()=>{}};cloudRef.current=current;
+    const load=async()=>{
+      if(!valid())return;setHistoryLoading(true);setSyncError('');
+      try {const latest=await sync.load(()=>listRef.current,{activeId:loadActiveSessionId(scope)});
         if(!valid())return;
         const restored=latest.filter(c=>!removedConversations.current.has(c.id)).map(c=>({...c,messages:c.messages.map(m=>({
           ...m,...(m.status==='streaming'&&!m.execution?{status:'stopped' as const,endReason:'aborted' as const,finishedAt:m.finishedAt??Date.now()}:{}),
           ...(m.attachmentPreparation?.state==='preparing'?{attachmentPreparation:{...m.attachmentPreparation,state:'stopped' as const,error:'附件准备已中断，请重新选择未上传文件。'}}:{}),
         }))}));
         current.ready=true;listRef.current=restored;setConversations(restored);
-        try {saveConversations(restored,scope);}catch(error){notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
-        if(!activeRef.current&&restored[0]) {activeRef.current=restored[0].id;applyActive(restored[0].id);}
+        setHistoryHasMore(sync.hasMore);
+        try {saveConversations(restored,scope);sync.checkpoint(loadConversations(scope));}catch(error){notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
+        const savedActive=loadActiveSessionId(scope);
+        if(!activeRef.current||!restored.some(c=>c.id===activeRef.current)) {const next=restored.find(c=>c.id===savedActive)??restored[0];if(next){activeRef.current=next.id;applyActive(next.id);}}
         for(const conversation of restored)for(const message of conversation.messages) {
           const view=message.execution;
           if(!view||!isExecutionActive(view)||executionObservers.current.has(message.id))continue;
@@ -239,7 +259,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(!recoveryRef.current.some(item=>item.msgId===message.id))recoveryRef.current.push(entry);
           observeDurable(entry);
         }
-    }).catch(error=>{if(valid())notifyRef.current(`会话同步暂不可用，本地记录仍保留：${error instanceof Error?error.message:'连接失败'}`,'err');});
+      }catch(error){if(valid()){const message=error instanceof Error?error.message:'连接失败';setSyncError(message);notifyRef.current(`会话同步暂不可用，本地记录仍保留：${message}`,'err');}}
+      finally{if(valid())setHistoryLoading(false);}
+    };
+    current.retry=load;void load();
     return()=>{controller.abort();if(cloudRef.current===current)cloudRef.current=null;};
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[scope]);
@@ -248,14 +271,51 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const cloud=cloudRef.current;
     if(!cloud?.ready||cloud.scope!==scope||scope!==ownerRef.current)return;
     const timer=window.setTimeout(()=>{
-      void cloud.sync.save(listRef.current).catch(error=>{
+      void cloud.sync.save(listRef.current).then(()=>{if(cloudRef.current===cloud){saveConversations(listRef.current,scope);cloud.sync.checkpoint(loadConversations(scope));}}).catch(error=>{
         if(cloudRef.current!==cloud)return;
-        cloud.ready=false;
-        notifyRef.current(`会话同步已暂停，请刷新后重试；本地记录仍保留：${error instanceof Error?error.message:'连接失败'}`,'err');
+        setSyncError(error instanceof Error?error.message:'连接失败');
+        notifyRef.current('会话同步暂不可用，本地记录仍保留，可点击重试同步。','err');
       });
     },750);
     return()=>window.clearTimeout(timer);
   },[conversations,scope]);
+
+  const loadEarlier=async()=>{
+    if(historyBusyRef.current)return;
+    const cloud=cloudRef.current,epoch=scopeEpoch.current;
+    historyBusyRef.current=true;setHistoryLoading(true);setSyncError('');
+    try {
+      if(cloud?.ready&&cloud.scope===ownerRef.current&&cloud.sync.hasMore) {
+        const latest=await cloud.sync.loadMore(()=>listRef.current);
+        if(epoch!==scopeEpoch.current||cloudRef.current!==cloud)return;
+        listRef.current=latest;setConversations(latest);setHistoryHasMore(cloud.sync.hasMore);
+        setHistoryLimit(limit=>limit+20);
+        saveConversations(latest,scope);cloud.sync.checkpoint(loadConversations(scope));
+        return;
+      }
+      if(epoch===scopeEpoch.current)setHistoryLimit(limit=>limit+20);
+    }catch(error){if(epoch===scopeEpoch.current)setSyncError(error instanceof Error?error.message:'加载失败');}
+    finally{if(epoch===scopeEpoch.current){historyBusyRef.current=false;setHistoryLoading(false);}}
+  };
+  const retryCloudSync=async()=>{
+    const cloud=cloudRef.current;if(!cloud||historyBusyRef.current)return;
+    setSyncError('');
+    try {if(cloud.ready){await cloud.sync.save(listRef.current);saveConversations(listRef.current,scope);cloud.sync.checkpoint(loadConversations(scope));}else await cloud.retry();}
+    catch(error){if(cloudRef.current===cloud)setSyncError(error instanceof Error?error.message:'同步失败');}
+  };
+
+  // Older pages are hydrated lazily; selecting one can reconnect an existing receipt.
+  useEffect(()=>{
+    if(!activeId||scope!==ownerRef.current)return;
+    const conversation=listRef.current.find(item=>item.id===activeId);
+    for(const message of conversation?.messages??[]) {
+      const view=message.execution;
+      if(!view||!isExecutionActive(view)||executionObservers.current.has(message.id))continue;
+      const entry:ExecutionRecovery={convId:activeId,msgId:message.id,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,conversationId:activeId}};
+      if(!recoveryRef.current.some(item=>item.msgId===message.id))recoveryRef.current.push(entry);
+      observeDurable(entry);
+    }
+  },[activeId,scope]);
 
   useEffect(()=>{
     if(!activeId||scope!==ownerRef.current)return;
@@ -793,6 +853,15 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
 
   return {
     conversations,
+    visibleConversations:(()=>{
+      const cloud=cloudRef.current;
+      const sorted=conversations.filter(item=>!cloud?.ready||cloud.sync.isVisible(item)).sort((a,b)=>b.updatedAt-a.updatedAt);
+      const visible=sorted.slice(0,historyLimit),active=sorted.find(item=>item.id===activeId);
+      if(active&&!visible.some(item=>item.id===active.id))visible.push(active);
+      return visible;
+    })(),
+    hasMoreHistory:historyHasMore||conversations.filter(item=>!cloudRef.current?.ready||cloudRef.current.sync.isVisible(item)).length>historyLimit,
+    historyLoading,syncError,loadEarlier,retryCloudSync,
     activeId,
     busy,
     send,

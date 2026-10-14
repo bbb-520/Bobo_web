@@ -238,7 +238,12 @@ export default function App() {
         <div className={`app${navOpen ? ' nav-open' : ''}`}>
           <div className="sidebar-mask" onClick={() => setNavOpen(false)} />
           <Sidebar
-            conversations={chat.conversations}
+            conversations={chat.visibleConversations}
+            hasMore={chat.hasMoreHistory}
+            loadingMore={chat.historyLoading}
+            syncError={chat.syncError}
+            onLoadEarlier={()=>void chat.loadEarlier()}
+            onRetrySync={()=>void chat.retryCloudSync()}
             activeId={chat.activeId}
             width={sidebarWidth}
             onSelect={(id) => {
