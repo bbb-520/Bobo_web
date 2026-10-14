@@ -16,6 +16,7 @@
     "test:image-job-404": "node --experimental-strip-types --test scripts/test-image-job-404.mjs",
     "test:image-job-reconcile": "node --experimental-strip-types --test scripts/test-image-job-reconcile.mjs",
     "test:accounts-billing": "node --import=./scripts/csrf-test-env.mjs --experimental-strip-types --test scripts/test-accounts-billing.mjs",
+    "test:billing-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-billing-recovery.tsx",
     "test:account-races": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-account-races.tsx",
     "test:proxy-cancellation": "node --test scripts/test-proxy-cancellation.mjs",
     "test:executions": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-executions.mjs scripts/test-execution-recovery.tsx",

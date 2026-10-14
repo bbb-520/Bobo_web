@@ -52,6 +52,7 @@ export function useBilling(
     const version = revision.current;
     const request = new AbortController();
     requests.current.add(request);
+    const timeout = window.setTimeout(() => request.abort(), 10000);
     try {
       const wallet = await getWallet(baseUrl, request.signal);
       if (request.signal.aborted || currentScope.current !== scope) return null;
@@ -66,6 +67,7 @@ export function useBilling(
       }
       throw cause;
     } finally {
+      window.clearTimeout(timeout);
       requests.current.delete(request);
     }
   }, [baseUrl, userId, scope, accept]);
@@ -120,6 +122,18 @@ export function useBilling(
     };
   }, [baseUrl, userId, refresh, accept]);
   const wallet = snapshot?.scope === scope ? snapshot.wallet : null;
+  const waitingForRelease = Boolean(wallet?.blocked || wallet?.activeUsageId);
+  useEffect(() => {
+    if (!userId || (connected && !waitingForRelease)) return;
+    let stopped = false;
+    let timer: number;
+    const poll = async () => {
+      try { await refresh(); } catch { /* retain the last authoritative wallet */ }
+      if (!stopped) timer = window.setTimeout(() => void poll(), 5000);
+    };
+    timer = window.setTimeout(() => void poll(), 5000);
+    return () => { stopped = true; window.clearTimeout(timer); };
+  }, [userId, connected, waitingForRelease, refresh]);
   const check = useCallback(
     async (capability: GenerationCapability, options?: { reconnectOnly?: boolean }) => {
       const latest = await refresh();
