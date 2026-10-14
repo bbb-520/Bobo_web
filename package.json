@@ -30,7 +30,8 @@
     "test:image-creation": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-image-creation.tsx",
     "test:ci-contract": "node --test e2e/ci-contract.test.mjs",
     "test:e2e": "playwright test",
-    "e2e:serve": "vite preview --host 127.0.0.1 --port 4173 --strictPort"
+    "e2e:serve": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "test:prompt-library": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-prompt-library.tsx"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",

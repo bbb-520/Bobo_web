@@ -17,10 +17,11 @@ import { isExecutionActive } from './api/executions';
 import { resolveChatMode, type ChatMode } from './lib/chatModes';
 const BoboWorld = lazy(() => import('./components/BoboWorld'));
 const AboutBobo = lazy(() => import('./components/AboutBobo'));
-type Page = 'start' | 'chat' | 'settings' | 'about' | 'world' | 'profile';
+const PromptLibrary = lazy(() => import('./components/prompts/PromptLibrary'));
+type Page = 'start' | 'chat' | 'settings' | 'about' | 'world' | 'profile' | 'prompts';
 function pageFromHash(): Page {
   const hash = window.location.hash.replace(/^#/, '');
-  return ['chat', 'settings', 'about', 'world', 'profile'].includes(hash)
+  return ['chat', 'settings', 'about', 'world', 'profile', 'prompts'].includes(hash)
     ? (hash as Page)
     : 'start';
 }
@@ -28,6 +29,24 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [page, setPage] = useState<Page>(pageFromHash);
+  const underlyingPage = useRef<Page>('chat');
+  const currentPage = useRef(page);
+  const promptTrigger = useRef<HTMLElement | null>(null);
+  const navigatePage = (next: Page) => {
+    if (next === 'prompts' && currentPage.current !== 'prompts') {
+      underlyingPage.current = currentPage.current;
+      promptTrigger.current = document.activeElement as HTMLElement | null;
+    }
+    currentPage.current = next;
+    setPage(next);
+  };
+  const renderPage = page === 'prompts' ? underlyingPage.current : page;
+  useEffect(() => {
+    if (page !== 'prompts' && promptTrigger.current?.isConnected) {
+      promptTrigger.current.focus();
+      promptTrigger.current = null;
+    }
+  }, [page]);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -43,7 +62,7 @@ export default function App() {
     setAuthChecking(false);
   };
   useEffect(() => {
-    const changed = () => setPage(pageFromHash());
+    const changed = () => navigatePage(pageFromHash());
     window.addEventListener('popstate', changed);
     window.addEventListener('hashchange', changed);
     return () => {
@@ -78,7 +97,7 @@ export default function App() {
       '',
       `${window.location.pathname}${window.location.search}${next === 'start' ? '' : `#${next}`}`,
     );
-    setPage(next);
+    navigatePage(next);
   };
   const openChat = () => {
     goto('chat');
@@ -186,13 +205,16 @@ export default function App() {
   };
   return (
     <>
-      {page === 'start' ? (
+      <div style={{ height: '100%' }} hidden={page === 'prompts'}>
+      {renderPage === 'start' ? (
         <StartPage
+          active={page !== 'prompts'}
+          onOpenPrompts={() => goto('prompts')}
           onStart={openChat}
           onOpenAbout={() => goto('about')}
           onOpenWorld={() => goto('world')}
         />
-      ) : page === 'about' ? (
+      ) : renderPage === 'about' ? (
         <Suspense
           fallback={<div className="world-view-loading" aria-hidden="true" />}
         >
@@ -202,7 +224,7 @@ export default function App() {
             baseUrl={settings.baseUrl}
           />
         </Suspense>
-      ) : page === 'world' ? (
+      ) : renderPage === 'world' ? (
         <Suspense
           fallback={<div className="world-loading" aria-label="加载中" />}
         >
@@ -212,7 +234,7 @@ export default function App() {
             baseUrl={settings.baseUrl}
           />
         </Suspense>
-      ) : page === 'settings' ? (
+      ) : renderPage === 'settings' ? (
         <SettingsSheet
           settings={settings}
           onChange={updateSettings}
@@ -223,7 +245,7 @@ export default function App() {
             goto('start');
           }}
         />
-      ) : page === 'profile' ? (
+      ) : renderPage === 'profile' ? (
         <UserProfileSheet
           user={user}
           baseUrl={settings.baseUrl}
@@ -260,6 +282,7 @@ export default function App() {
             onGoHome={() => goto('start')}
           />
           <ChatArea
+            onOpenPrompts={() => goto('prompts')}
             context={{hasImages:Boolean(activeConv?.imageAttachments?.length),imageCount:activeConv?.imageAttachments?.length,hasDocuments:Boolean(activeConv?.documentConversationId)}}
             key={`${user?.userId ?? user?.username ?? 'guest'}:${chat.activeId ?? 'new'}`}
             onRetryAttachments={chat.retryAttachments}
@@ -283,13 +306,20 @@ export default function App() {
           />
         </div>
       )}
+      </div>
+      {page === 'prompts' && <Suspense fallback={<div className="world-loading" aria-label="正在加载提示词" />}>
+        <PromptLibrary baseUrl={settings.baseUrl} user={user} suspended={loginOpen}
+          onClose={() => goto(underlyingPage.current)} onHome={() => goto('start')}
+          onSettings={() => goto('settings')} onProfile={() => goto('profile')}
+          onLogin={() => setLoginOpen(true)} />
+      </Suspense>}
       {loginOpen && (
         <SetupGuide
           baseUrl={settings.baseUrl}
           onLoggedIn={(next) => {
             updateUser(next);
             setLoginOpen(false);
-            goto('chat');
+            if (currentPage.current !== 'prompts') goto('chat');
           }}
           onClose={() => setLoginOpen(false)}
         />

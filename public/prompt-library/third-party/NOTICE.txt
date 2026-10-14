@@ -1,0 +1,15 @@
+Prompt Library third-party notice
+
+Source: https://github.com/wuyoscar/GPT-Image2-Skill
+Pinned commit: 9f8aa1a44a4a5c0f5a5d6e45eed564b3e2d5b87f
+License: MIT (see GPT-Image2-Skill-LICENSE.txt)
+Copyright (c) 2026 Wuyoscar
+
+This catalog contains all 164 prompt bodies in 31 categories (163 numbered entries).
+Original prompt bodies, stable IDs, declared metadata, author and source references
+are exported using the existing GalleryMarkdownParser. Chinese category labels and
+search keywords are editorial translations, separate from original prompt tags.
+The parser normalizes CRLF to LF and removes enclosing fence/outer whitespace.
+Individual author and source references are retained from the upstream documents;
+the repository license notice does not replace those attribution markers.
+Upstream preview images are not distributed or fetched by this export.
