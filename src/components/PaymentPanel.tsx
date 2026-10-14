@@ -105,8 +105,9 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
   const expired = Boolean(
     order && Date.parse(order.expiresAt) <= now && order.status === 'PENDING',
   );
+  const manualReview = order?.status === 'PENDING' && order.reconcileState === 'MANUAL';
   useEffect(() => {
-    if (!order || !['PENDING', 'REFUNDING'].includes(order.status)) return;
+    if (!order || manualReview || !['PENDING', 'REFUNDING'].includes(order.status)) return;
     const version = epoch.current;
     let closed = false;
     let timer: number | undefined;
@@ -137,7 +138,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
       window.clearTimeout(timer);
       request?.abort();
     };
-  }, [baseUrl, order?.id, order?.status, expired]);
+  }, [baseUrl, order?.id, order?.status, expired, manualReview]);
   useEffect(() => {
     setQrError('');
     if (
@@ -305,6 +306,8 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
                   ? '已原路退款'
                   : order.status === 'CLOSED'
                     ? '订单已关闭'
+                    : manualReview
+                      ? '支付结果待人工核对，请联系管理员'
                     : expired
                 ? '订单付款时间已结束'
                 : '等待扫码支付'}
@@ -333,7 +336,7 @@ export default function PaymentPanel({ baseUrl, userId, onPaid }: Props) {
               分钟
             </small>
           )}
-          {expired && (
+          {expired && !manualReview && (
             <p className="hint">已付款但未更新时，请刷新状态核对到账。</p>
           )}
           <div className="account-actions">

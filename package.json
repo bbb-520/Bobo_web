@@ -16,6 +16,7 @@
     "test:image-job-404": "node --experimental-strip-types --test scripts/test-image-job-404.mjs",
     "test:image-job-reconcile": "node --experimental-strip-types --test scripts/test-image-job-reconcile.mjs",
     "test:accounts-billing": "node --import=./scripts/csrf-test-env.mjs --experimental-strip-types --test scripts/test-accounts-billing.mjs",
+    "test:billing-recovery": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-billing-recovery.tsx",
     "test:account-races": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-account-races.tsx",
     "test:proxy-cancellation": "node --test scripts/test-proxy-cancellation.mjs",
     "test:executions": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-executions.mjs scripts/test-execution-recovery.tsx",
@@ -26,7 +27,10 @@
     "test:unified-chat": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-unified-chat.tsx",
     "test:ui-polish": "node --import=tsx --test scripts/test-ui-polish.tsx",
     "test:chat-modes": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-chat-modes.tsx",
-    "test:image-creation": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-image-creation.tsx"
+    "test:image-creation": "node --import=./scripts/csrf-test-env.mjs --import=tsx --test scripts/test-image-creation.tsx",
+    "test:ci-contract": "node --test e2e/ci-contract.test.mjs",
+    "test:e2e": "playwright test",
+    "e2e:serve": "vite preview --host 127.0.0.1 --port 4173 --strictPort"
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.3.5",
@@ -44,6 +48,7 @@
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.56.1",
     "@types/node": "^22.7.4",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.11",
