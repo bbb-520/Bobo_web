@@ -20,9 +20,9 @@ afterEach(() => {
   host?.remove();
   sessionStorage.clear();
 });
-async function restore(status) {
+async function restore(status, reconcileState) {
   sessionStorage.setItem('bobo.payment.v1::alice',JSON.stringify({key:'key',channel:'ALIPAY',amountCents:1,orderId:'test-order'}));
-  globalThis.fetch = async () => new Response(JSON.stringify({id:'test-order',channel:'ALIPAY',amountCents:1,status,qrCode:null,expiresAt:new Date(Date.now()-60000).toISOString()}),{headers:{'Content-Type':'application/json'}});
+  globalThis.fetch = async () => new Response(JSON.stringify({id:'test-order',channel:'ALIPAY',amountCents:1,status,reconcileState,qrCode:null,expiresAt:new Date(Date.now()-60000).toISOString()}),{headers:{'Content-Type':'application/json'}});
   host=document.createElement('div'); document.body.append(host); root=createRoot(host);
   act(() => root.render(<PaymentPanel baseUrl="" userId="alice" onPaid={() => {}} />));
   await flush();
@@ -47,6 +47,22 @@ test('locally expired pending payment still polls for late confirmation',async (
   await act(async () => { await new Promise(r => setTimeout(r,3200)); });
   assert.ok(calls>0);
   assert.match(host.textContent,/充值已到账/);
+});
+
+test('manual reconciliation has a visible exit and stops automatic payment polling', async () => {
+  await restore('PENDING','MANUAL');
+  let calls=0;
+  globalThis.fetch=async () => {calls++;throw Error('manual orders must not be polled');};
+  assert.match(host.textContent,/支付结果待人工核对/);
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,3200));});
+  assert.equal(calls,0);
+  assert.ok([...host.querySelectorAll('button')].some(button=>button.textContent.includes('新建另一订单')));
+});
+
+test('a verified late payment remains paid even when the reconciliation audit is MANUAL', async () => {
+  await restore('PAID','MANUAL');
+  assert.match(host.textContent,/充值已到账/);
+  assert.doesNotMatch(host.textContent,/支付结果待人工核对/);
 });
 
 test('reset remains available while order creation is pending and unlocks a new attempt',async () => {
