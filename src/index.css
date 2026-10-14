@@ -3096,10 +3096,6 @@ h4.md-h {
 .onboarding-bubble p { margin: 0; color: var(--ink-3); font-size: 12px; line-height: 1.65; }
 .onboarding-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 16px; }
 .onboarding-link { border: 0; color: var(--ink-2); background: transparent; cursor: pointer; font: inherit; font-size: 11px; }
-[data-theme='dark'] { color-scheme: dark; }
-[data-theme='dark'] { --paper: #111216; --paper-deep: #18191d; --surface: #1b1c20; --surface-2: #23242a; --ink: #f1f1f3; --ink-2: #c0c1c8; --ink-3: #858792; --line: #34353d; --line-strong: #454650; --sb: #17181c; --sb-2: #1f2025; --sb-ink: #f2f2f4; --sb-ink-2: #a4a5ae; --sb-line: #34353d; }
-[data-theme='dark'] body { background: var(--paper); }
-[data-theme='dark'] .settings-sheet, [data-theme='dark'] .profile-page, [data-theme='dark'] .onboarding-bubble { background: #1b1c20; }
 
 /* 用户页是独立路由页面，不再以设置弹层的窄卡片呈现。 */
 .profile-mask.profile-route { position: fixed; inset: 0; display: block; padding: 0; overflow: auto; background: var(--paper); backdrop-filter: none; }
