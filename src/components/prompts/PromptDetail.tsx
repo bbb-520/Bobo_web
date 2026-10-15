@@ -1,5 +1,5 @@
 import { useEffect,useRef,useState } from 'react';
-import { copyPrompt,promptTitle,safeCoverUrl,type PromptEntry } from '../../lib/promptLibrary';
+import { copyPrompt,promptTitle,type PromptEntry } from '../../lib/promptLibrary';
 import PromptCover from './PromptCover';
 
 export default function PromptDetail({entry,categoryLabel,imageUrl,onClose,manual=false}:{entry:PromptEntry;categoryLabel:string;imageUrl?:string;onClose:()=>void;manual?:boolean}) {
@@ -22,9 +22,6 @@ export default function PromptDetail({entry,categoryLabel,imageUrl,onClose,manua
   },[]);
   useEffect(()=>{if(copyState==='manual'){text.current?.focus();text.current?.select();}},[copyState]);
   const copy=async()=>{if(copying)return;setCopying(true);setCopyState(await copyPrompt(entry)?'copied':'manual');setCopying(false);};
-  const provenance=safeCoverUrl(entry.sourceRepository);
-  const original=entry.sourceAttribution?.match(/^\[([^\]]+)\]\((https:\/\/[^)]+)\)$/);
-  const originalUrl=original?safeCoverUrl(original[2]):null;
   const title=promptTitle(entry);
   return <div className="prompt-detail-backdrop" onClick={event=>{if(event.target===event.currentTarget)onClose();}}>
     <div className="prompt-detail" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="prompt-detail-title" data-prompt-id={entry.id}>
@@ -40,7 +37,6 @@ export default function PromptDetail({entry,categoryLabel,imageUrl,onClose,manua
             {entry.size&&<span>尺寸 {entry.size}</span>}{entry.quality&&<span>质量 {entry.quality}</span>}
             {(entry.tags?.length?entry.tags:entry.subjects??[]).map((tag,index)=><span key={`${tag}-${index}`}>{tag}</span>)}
           </div>}
-          {entry.source==='gallery'&&<div className="prompt-provenance"><span>{entry.author?`作者 ${entry.author}`:'收录于 GPT-Image2-Skill'}</span>{originalUrl?<a href={originalUrl} target="_blank" rel="noreferrer">原始出处 · {original?.[1]}</a>:entry.sourceAttribution&&<span>原始出处 {entry.sourceAttribution}</span>}{provenance&&<a href={provenance} target="_blank" rel="noreferrer">画廊来源</a>}<span>{entry.attribution||'MIT License'}</span></div>}
           {copyState==='manual'&&<div className="prompt-manual-copy" role="status"><p>浏览器未允许自动复制，请选中下方全文手动复制。</p><textarea ref={text} readOnly aria-label="可手动复制的完整提示词" value={entry.content}/></div>}
         </div>
         <footer className="prompt-detail-footer"><span>{copyState==='copied'?'完整提示词已复制':'复制后，回到聊天开始创作'}</span><button className="prompt-copy-primary" type="button" disabled={copying} onClick={()=>void copy()}>{copyState==='copied'?'已复制':copying?'正在复制…':'复制提示词'}</button></footer>
