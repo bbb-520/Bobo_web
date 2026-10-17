@@ -2,7 +2,7 @@ import { isImageFile, validateAttachments } from './attachments';
 
 export type ChatMode = 'chat' | 'text' | 'vision' | 'document' | 'image';
 export type ActualChatMode = Exclude<ChatMode, 'chat'>;
-export interface ChatModeContext { hasImages?: boolean; imageCount?: number; hasDocuments?: boolean; }
+export interface ChatModeContext { hasImages?: boolean; imageCount?: number; hasDocuments?: boolean; imageIntent?: 'GENERATE' | 'REMIX' | 'DESCRIBE'; }
 export const CHAT_MODES: {id: ChatMode; label: string; description: string; placeholder: string}[] = [
   {id:'chat',label:'智能聊天',description:'自动选择文字、图片或文件问答；明确说“生成图片”会直接生图。',placeholder:'聊点什么，或添加图片与文件…'},
   {id:'text',label:'文本聊天',description:'文字问答与写作，不引用旧图片或文件；明确生图指令会自动转图片生成。',placeholder:'输入问题或写作要求…'},
@@ -38,9 +38,10 @@ export function requestsImageGeneration(text: string): boolean {
 
 export function resolveChatMode(text: string, files: File[] = [], selected: ChatMode = 'chat', context: ChatModeContext = {}) {
   const images=files.filter(isImageFile),documents=files.filter(file=>!isImageFile(file));
-  const generating=selected==='image'||requestsImageGeneration(text);
+  const generating=selected==='image'||context.imageIntent==='GENERATE'||context.imageIntent==='REMIX'||(context.imageIntent===undefined&&requestsImageGeneration(text));
   let mode:ActualChatMode=generating?'image':selected==='text'?'text':selected==='vision'?'vision':selected==='document'?'document':documents.length||context.hasDocuments?'document':images.length||context.hasImages?'vision':'text';
-  const referenceFromContext=mode==='image'&&selected!=='text'&&!files.length&&Boolean(context.hasImages)&&/(?:这张|原图|参考图|该图|上(?:一张|传的)(?:图片|照片|图)|this (?:image|photo)|reference image)/i.test(text);
+  const referenceFromContext=mode==='image'&&selected!=='text'&&!files.length&&Boolean(context.hasImages)
+    &&(context.imageIntent==='REMIX'||(context.imageIntent===undefined&&/(?:这张|原图|参考图|该图|上(?:一张|传的)(?:图片|照片|图)|this (?:image|photo)|reference image)/i.test(text)));
   const useImages=mode!=='text'&&(mode!=='image'||referenceFromContext);
   const useDocuments=mode==='document';
   let error=validateAttachments(files,mode==='image'?'image':'chat')??undefined;
@@ -52,4 +53,11 @@ export function resolveChatMode(text: string, files: File[] = [], selected: Chat
   if(!error&&mode==='document'&&!documents.length&&!context.hasDocuments)error='请先添加文件，再进行概要或问答。';
   return {mode,kind:mode==='image'?'image' as const:'chat' as const,capability:mode==='image'?'IMAGE' as const:mode==='vision'||(mode==='document'&&(images.length||context.hasImages))?'VISION' as const:'CHAT' as const,
     automatic:generating&&selected!=='image',useImages,useDocuments,referenceFromContext,error};
+}
+
+/** Image-context auto routing uses the server classifier, never local edit keywords. */
+export function needsImageIntent(text: string, files: File[], selected: ChatMode, context: ChatModeContext = {}): boolean {
+  return Boolean(text.trim() && (selected==='chat'||selected==='vision')
+    && !files.some(file=>!isImageFile(file)) && !(selected==='chat'&&context.hasDocuments)
+    && (files.some(isImageFile)||context.hasImages));
 }

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { IconPlus, IconSend, IconStop } from './icons';
 import { billingWarningMessage, formatTokens, generationBlockReason, type Wallet } from '../lib/billing';
 import { CHAT_ATTACHMENT_ACCEPT, IMAGE_CREATION_ACCEPT, isImageFile, validateAttachments } from '../lib/attachments';
-import { CHAT_MODES, MODE_LABELS, resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
+import { CHAT_MODES, MODE_LABELS, needsImageIntent, resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
 interface Props {
   value:string;onChange:(v:string)=>void;onSend:(files?:File[],kind?:ChatMode)=>Promise<boolean>;
   wallet:Wallet|null;signedIn:boolean;onOpenAccount:()=>void;onStop:()=>void;running:boolean;
@@ -13,7 +13,8 @@ export default function Composer({value,onChange,onSend,onStop,running,wallet,si
   const helpRef=useRef<HTMLDivElement>(null),helpButtonRef=useRef<HTMLButtonElement>(null),modeId=useId(),helpId=useId();
   const [helpOpen,setHelpOpen]=useState(false);
   const [checking,setChecking]=useState(false),[kind,setKind]=useState<ChatMode>('chat'),[files,setFiles]=useState<File[]>([]),[previews,setPreviews]=useState<(string|null)[]>([]),[error,setError]=useState('');
-  const route=resolveChatMode(value,files,kind,context),modeInfo=CHAT_MODES.find(mode=>mode.id===kind)!;
+  const classifying=needsImageIntent(value,files,kind,context);
+  const route=resolveChatMode(value,files,kind,{...context,...(classifying?{imageIntent:'DESCRIBE' as const}:{})}),modeInfo=CHAT_MODES.find(mode=>mode.id===kind)!;
   const fileHelp=kind==='image'?'支持纯文字生图，或一张参考图片（最多 20 MiB）。':kind==='text'?'本次仅使用文字上下文。':kind==='vision'?'最多 3 张图片，每张 20 MiB；不填写文字时自动描述图片。':'最多 8 个附件，其中图片最多 3 张、每张 20 MiB；文档每份 100 MiB。扫描 PDF 暂不支持 OCR。';
   useEffect(()=>{
     if(!helpOpen)return;
@@ -28,7 +29,7 @@ export default function Composer({value,onChange,onSend,onStop,running,wallet,si
     const next=[...files,...added],reason=validateAttachments(next,kind==='image'?'image':'chat');
     if(reason){setError(reason);return;}setError('');setFiles(next);
   };
-  const blocked=signedIn?generationBlockReason(wallet,route.capability):null;
+  const blocked=signedIn?generationBlockReason(wallet,classifying?'CHAT':route.capability):null;
   const invalid=Boolean(route.error);
   const submit=async()=>{
     if(running||sendingRef.current||blocked||invalid||(!files.length&&!value.trim()))return;

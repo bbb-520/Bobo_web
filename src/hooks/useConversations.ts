@@ -11,9 +11,10 @@ import {
   uploadImageAsset,
 } from '../lib/api';
 import { ImageJobNotFoundError, reconcileImageJobs } from '../lib/imageJobPolling';
+import { classifyImageIntent } from '../lib/imageIntent';
 import { imageCreationApi } from '../lib/imageCreation';
 import { ApiError } from '../lib/http';
-import { resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
+import { needsImageIntent, resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
 import {
   deriveTitle,
   loadActiveSessionId,
@@ -29,7 +30,7 @@ import { loadExecutionRecovery, saveExecutionRecovery, type ExecutionRecovery } 
 import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/executionRunner';
 import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
 import { attachmentQuestion, imageReference, isImageFile } from '../lib/attachments';
-import { getWallet, isInArrears } from '../lib/billing';
+import { generationBlockReason, getWallet, isInArrears } from '../lib/billing';
 import { ConversationSync, conversationRemote, applySyncRecovery } from '../lib/conversationSync';
 import { fetchAssetPreview, type AssetPreview } from '../lib/attachmentPreviews';
 
@@ -686,7 +687,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     return {convId:conv.id,user,assistant};
   };
 
-  const prepareAttachments=(convId:string,userId:string,assistantId:string,retry=false)=>{
+  const prepareAttachments=(convId:string,userId:string,assistantId:string,retry=false,classifyIntent=false)=>{
     const epoch=scopeEpoch.current,controller=new AbortController(),api=documentApi(settingsRef.current.baseUrl);
     const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted;
     let transferred=false;
@@ -695,12 +696,12 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const progress=(message:string)=>{if(valid())mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===assistantId?{...m,executionConnection:message}:m)}));};
     const failed=(message:string,stopped=false)=>{
       if(epoch!==scopeEpoch.current)return;
-      mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:{state:stopped?'stopped':'failed',assistantId,error:message}}:m.id===assistantId?{...m,status:stopped?'stopped':'error',error:message,executionConnection:undefined,finishedAt:Date.now()}:m)}));
+      mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:{state:stopped?'stopped':'failed',assistantId,classifyIntent,error:message}}:m.id===assistantId?{...m,status:stopped?'stopped':'error',error:message,executionConnection:undefined,finishedAt:Date.now()}:m)}));
       if(busyRef.current?.msgId===assistantId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
     };
     busyRef.current={convId,msgId:assistantId};setBusy(busyRef.current);
     activeRunRef.current={convId,msgId:assistantId,disconnect:()=>controller.abort(),requestStop:()=>{controller.abort();failed('附件准备已停止，已上传文档可重试；未上传文件需重新选择。',true);}};
-    patchUser(m=>({...m,attachmentPreparation:{state:'preparing',assistantId}}));
+    patchUser(m=>({...m,attachmentPreparation:{state:'preparing',assistantId,classifyIntent}}));
     preparationTimer=window.setTimeout(()=>{
       if(!valid()||transferred)return;
       const message='附件处理等待超时，已上传内容已保留。可重试附件或发送新消息。';
@@ -759,9 +760,36 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(isInArrears(wallet))throw new Error('账户已欠费，请充值后重试文档问答。');
         }
         if(!valid())return;
-        const route=resolveChatMode(current.content,files,current.selectedMode??'chat',imageContext(conversation));
+        const selected=current.selectedMode??'chat';
+        const contextForRoute=images.length?{...imageContext(conversation),hasImages:true,imageCount:images.length}:imageContext(conversation);
+        // Persisted preparation intent survives reload; uploaded references are not transient Files.
+        const classifying=classifyIntent;
+        let intent:'GENERATE'|'REMIX'|'DESCRIBE'|undefined;
+        if(classifying) {
+          progress('正在判断图片请求…');
+          intent=await classifyImageIntent(settingsRef.current.baseUrl,current.content,controller.signal);
+          if(!valid())return;
+        }
+        const route=resolveChatMode(current.content,files,selected,{...contextForRoute,imageIntent:intent});
+        if(route.error)throw new Error(route.error);
+        if(route.mode==='image'&&images.length>1)throw new Error('请选择一张参考图片再生成。');
+        if(intent==='REMIX'&&!images.length&&!conversation.imageAttachments?.length)throw new Error('请先选择一张参考图片再编辑。');
+        if(classifying) {
+          const wallet=await getWallet(settingsRef.current.baseUrl,controller.signal);
+          if(!valid())return;
+          const reason=generationBlockReason(wallet,route.capability);
+          if(reason)throw new Error(reason);
+        }
+        if(route.mode==='image') {
+          const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:convId,prompt:current.content,
+            attachments:images.length?images.map(imageReference):route.referenceFromContext?conversation.imageAttachments?.map(imageReference):undefined,state:'submitting'};
+          mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(images.length?{imageAttachments:images.map(imageReference)}:{}),messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,mode:'image',automaticMode:route.automatic,status:'streaming',error:undefined,executionConnection:undefined,imageRequest:request}:m)}),true);
+          pendingFilesRef.current.delete(userId);transferred=true;
+          submitImageRequest(convId,assistantId,request,false,undefined,userId);
+          return;
+        }
         const refs=images.length?images.map(imageReference):route.useImages?conversation.imageAttachments:undefined;
-        mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
+        mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,mode:route.mode,automaticMode:route.automatic,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
         const scoped=context?.conversationId??(route.useDocuments?conversation.documentConversationId:undefined);
         const entry:ExecutionRecovery={convId,msgId:assistantId,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:current.content,...(scoped?{documentConversationId:scoped}:{conversationId:convId}),...(refs?.length?{attachments:refs.map(imageReference)}:{})}};
         saveConversations(listRef.current,ownerRef.current);recoveryRef.current.push(entry);persistRecovery(true);pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
@@ -777,20 +805,22 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const retryAttachments=(userId:string)=>{
     if(busyRef.current)return;
     const conv=listRef.current.find(c=>c.messages.some(m=>m.id===userId)),message=conv?.messages.find(m=>m.id===userId);
-    if(conv&&message?.attachmentPreparation)prepareAttachments(conv.id,userId,message.attachmentPreparation.assistantId,true);
+    if(conv&&message?.attachmentPreparation)prepareAttachments(conv.id,userId,message.attachmentPreparation.assistantId,true,message.attachmentPreparation.classifyIntent??false);
   };
 
   const send=(raw:string,input?:File|File[],kind:ChatMode='chat')=>{
     const files=Array.isArray(input)?input:input?[input]:[];
     if((!raw.trim()&&!files.length)||busyRef.current)return false;
-    const conversation=listRef.current.find(c=>c.id===activeRef.current),route=resolveChatMode(raw,files,kind,imageContext(conversation));
+    const conversation=listRef.current.find(c=>c.id===activeRef.current),context=imageContext(conversation);
+    const classifying=needsImageIntent(raw,files,kind,context);
+    const route=resolveChatMode(raw,files,kind,{...context,...(classifying?{imageIntent:'DESCRIBE' as const}:{})});
     if(route.error){notifyRef.current(route.error,'err');return false;}
     try {
     saveConversations(listRef.current,ownerRef.current);
     const text=attachmentQuestion(raw,files,route.kind);
-    if(route.mode!=='image'&&!files.length){sendTextExecution(text,kind);return true;}
+    if(!classifying&&route.mode!=='image'&&!files.length){sendTextExecution(text,kind);return true;}
     const turn=insertTurn(text,files,route.mode==='image',kind);
-    if(route.mode!=='image'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id);return true;}
+    if(route.mode!=='image'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id,false,classifying);return true;}
     const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:turn.convId,prompt:text,
       attachments:route.referenceFromContext?conversation?.imageAttachments?.map(imageReference):undefined,state:files.length?'uploading':'submitting'};
     mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,imageRequest:request}:m)}));

@@ -14,7 +14,7 @@ import UserProfileSheet from './components/UserProfileSheet';
 import { getMe, type AuthUser } from './lib/auth';
 import { billingWarningMessage, isInArrears } from './lib/billing';
 import { isExecutionActive } from './api/executions';
-import { resolveChatMode, type ChatMode } from './lib/chatModes';
+import { needsImageIntent, resolveChatMode, type ChatMode } from './lib/chatModes';
 const BoboWorld = lazy(() => import('./components/BoboWorld'));
 const AboutBobo = lazy(() => import('./components/AboutBobo'));
 const PromptLibrary = lazy(() => import('./components/prompts/PromptLibrary'));
@@ -147,10 +147,12 @@ export default function App() {
     const version = authRevision.current;
     generationLock.current = true;
     try {
-      const route=resolveChatMode(q,files??[],kind,{hasImages:Boolean(activeConv?.imageAttachments?.length),imageCount:activeConv?.imageAttachments?.length,hasDocuments:Boolean(activeConv?.documentConversationId)});
+      const context={hasImages:Boolean(activeConv?.imageAttachments?.length),imageCount:activeConv?.imageAttachments?.length,hasDocuments:Boolean(activeConv?.documentConversationId)};
+      const classifying=needsImageIntent(q,files??[],kind,context);
+      const route=resolveChatMode(q,files??[],kind,{...context,...(classifying?{imageIntent:'DESCRIBE' as const}:{})});
       if(route.error){push(route.error,'err');return false;}
       await billing.check(
-        route.capability,
+        classifying?'CHAT':route.capability,
       );
       if (version !== authRevision.current) return false;
       return chat.send(q, files, kind) !== false;

@@ -163,7 +163,7 @@ export interface ChatMsg {
   /** 用户上传图片的元数据，不保存二进制或 data URL。 */
   attachments?: ImageAttachment[];
   documentAttachments?:DocumentAttachment[];
-  attachmentPreparation?:{state:'preparing'|'failed'|'stopped';error?:string;assistantId:string};
+  attachmentPreparation?:{state:'preparing'|'failed'|'stopped';error?:string;assistantId:string;classifyIntent?:boolean};
   /** 后台图片任务，仅保存任务 ID 和状态。 */
   imageJobs?: ImageJobRef[];
   sceneCard?: SceneCardEventData;
