@@ -12,7 +12,7 @@ import {
 } from '../lib/api';
 import { ImageJobNotFoundError, reconcileImageJobs } from '../lib/imageJobPolling';
 import { classifyImageIntent } from '../lib/imageIntent';
-import { imageCreationApi } from '../lib/imageCreation';
+import { confirmImageCreation, imageCreationApi } from '../lib/imageCreation';
 import { ApiError } from '../lib/http';
 import { needsImageIntent, resolveChatMode, type ChatMode, type ChatModeContext } from '../lib/chatModes';
 import {
@@ -484,8 +484,12 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
             }
             if(!valid())return;
             if(!job&&request.stopRequested){patch({status:'stopped',imageRequest:request,finishedAt:Date.now()});return;}
+            if(!job&&request.imageGenerationConfirmed!==true) {
+              patch({status:'stopped',imageRequest:{...request,state:'failed'},error:'旧图片请求缺少本次确认记录，已暂停创建；请重新选择图片生成模式或确认后发送。',finishedAt:Date.now()});
+              return;
+            }
             if(!job)saveConversations(listRef.current,ownerRef.current);
-            if(!job)job=await api.create({requestId:request.requestId,conversationId:request.conversationId,prompt:request.prompt,attachments:request.attachments},controller.signal);
+            if(!job)job=await api.create({requestId:request.requestId,conversationId:request.conversationId,prompt:request.prompt,attachments:request.attachments,imageGenerationConfirmed:request.imageGenerationConfirmed===true},controller.signal);
             if(!valid())return;
             if(!job||typeof job.jobId!=='string')throw new Error('图片任务受理信息不完整');
             patch({imageRequest:{...request,state:'accepted'},status:'done',error:undefined,content:'图片任务已受理，完成后会显示在这里。',finishedAt:Date.now()});
@@ -781,7 +785,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(reason)throw new Error(reason);
         }
         if(route.mode==='image') {
-          const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:convId,prompt:current.content,
+          const confirmed=confirmImageCreation(current.content,selected==='image',Boolean(images.length||route.referenceFromContext));
+          if(!valid())return;
+          if(!confirmed) {
+            mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(images.length?{imageAttachments:images.map(imageReference)}:{}),messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,status:'stopped',content:'已取消图片创作，未提交生成任务。',error:undefined,executionConnection:undefined,finishedAt:Date.now()}:m)}),true);
+            pendingFilesRef.current.delete(userId);
+            return;
+          }
+          const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:convId,prompt:current.content,imageGenerationConfirmed:true,
             attachments:images.length?images.map(imageReference):route.referenceFromContext?conversation.imageAttachments?.map(imageReference):undefined,state:'submitting'};
           mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(images.length?{imageAttachments:images.map(imageReference)}:{}),messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,mode:'image',automaticMode:route.automatic,status:'streaming',error:undefined,executionConnection:undefined,imageRequest:request}:m)}),true);
           pendingFilesRef.current.delete(userId);transferred=true;
@@ -815,13 +826,14 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const classifying=needsImageIntent(raw,files,kind,context);
     const route=resolveChatMode(raw,files,kind,{...context,...(classifying?{imageIntent:'DESCRIBE' as const}:{})});
     if(route.error){notifyRef.current(route.error,'err');return false;}
+    if(route.mode==='image'&&!confirmImageCreation(raw,kind==='image',Boolean(files.some(isImageFile)||route.referenceFromContext)))return false;
     try {
     saveConversations(listRef.current,ownerRef.current);
     const text=attachmentQuestion(raw,files,route.kind);
     if(!classifying&&route.mode!=='image'&&!files.length){sendTextExecution(text,kind);return true;}
     const turn=insertTurn(text,files,route.mode==='image',kind);
     if(route.mode!=='image'){prepareAttachments(turn.convId,turn.user.id,turn.assistant.id,false,classifying);return true;}
-    const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:turn.convId,prompt:text,
+    const request:NonNullable<ChatMsg['imageRequest']>={requestId:uid(),conversationId:turn.convId,prompt:text,imageGenerationConfirmed:true,
       attachments:route.referenceFromContext?conversation?.imageAttachments?.map(imageReference):undefined,state:files.length?'uploading':'submitting'};
     mutateExecutionConversations(items=>items.map(c=>c.id!==turn.convId?c:{...c,messages:c.messages.map(m=>m.id===turn.assistant.id?{...m,imageRequest:request}:m)}));
     saveConversations(listRef.current,ownerRef.current);

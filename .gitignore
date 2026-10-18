@@ -15,3 +15,14 @@ secrets/
 .docker-work/
 /tmp/
 /.migration/
+
+# Local maintenance materials; publish core source and README only.
+/scripts/
+/e2e/
+/.github/
+/playwright.config.ts
+/AGENTS.md
+/.dockerignore
+/.env.example
+/Dockerfile
+/docker-compose.yml

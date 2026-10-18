@@ -4,8 +4,8 @@ export type ChatMode = 'chat' | 'text' | 'vision' | 'document' | 'image';
 export type ActualChatMode = Exclude<ChatMode, 'chat'>;
 export interface ChatModeContext { hasImages?: boolean; imageCount?: number; hasDocuments?: boolean; imageIntent?: 'GENERATE' | 'REMIX' | 'DESCRIBE'; }
 export const CHAT_MODES: {id: ChatMode; label: string; description: string; placeholder: string}[] = [
-  {id:'chat',label:'智能聊天',description:'自动选择文字、图片或文件问答；明确说“生成图片”会直接生图。',placeholder:'聊点什么，或添加图片与文件…'},
-  {id:'text',label:'文本聊天',description:'文字问答与写作，不引用旧图片或文件；明确生图指令会自动转图片生成。',placeholder:'输入问题或写作要求…'},
+  {id:'chat',label:'智能聊天',description:'自动选择文字、图片或文件问答；识别为图片创作时，确认后再生成。',placeholder:'聊点什么，或添加图片与文件…'},
+  {id:'text',label:'文本聊天',description:'文字问答与写作，不引用旧图片或文件；识别为图片创作时，确认后再生成。',placeholder:'输入问题或写作要求…'},
   {id:'vision',label:'图片多模态',description:'识别、理解和比较图片，可继续追问；最多 3 张图片。',placeholder:'添加图片，问问其中的细节…'},
   {id:'document',label:'文件多模态',description:'总结文件、检索和问答，可搭配图片；支持沿用已上传文件追问。',placeholder:'添加文件，提问或总结内容…'},
   {id:'image',label:'图片生成',description:'输入文字生成一张图片；也可添加一张参考图进行编辑。',placeholder:'描述你想生成的画面…'},
