@@ -38,6 +38,8 @@ function backend(options={}){
  globalThis.fetch=async(url,init={})=>{
   const path=String(url);calls.push({path,init});
   if(options.fetch){const result=await options.fetch(path,init,calls);if(result)return result;}
+  if(path==='/api/chat/image-intent')return Response.json({intent:'DESCRIBE'});
+  if(path==='/api/billing/wallet')return Response.json(wallet);
   if(path==='/api/image-assets/upload-policy')return Response.json({assetId:`asset-${++count}`,uploadUrl:'https://oss.test/upload',fields:{key:'object'}});
   if(path==='https://oss.test/upload'||path.endsWith('/complete'))return new Response(null,{status:204});
   if(path==='/api/documents'&&init.method==='POST')return Response.json(options.doc??readyDoc);

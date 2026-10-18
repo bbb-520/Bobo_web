@@ -80,3 +80,18 @@ test('generation rejects documents and multiple images rather than silently igno
  assert.ok(resolveChatMode('生成一张图片',[doc()],'chat').error);assert.ok(resolveChatMode('画一只猫',[image(),image()],'chat').error);
  assert.equal(resolveChatMode('海边日落',[],'image').mode,'image');assert.ok(resolveChatMode('',[],'image').error);
 });
+
+test('composer waits for server intent before imposing the one-image generation limit',()=>{
+ mount('把这张照片做成一张复古海报');
+ const input=host.querySelector('input[type=file]');Object.defineProperty(input,'files',{configurable:true,value:[image(),image()]});
+ act(()=>input.dispatchEvent(new Event('change',{bubbles:true})));
+ assert.equal(host.querySelector('[aria-label="发送"]').disabled,false);
+ assert.equal(host.querySelector('.composer-mode-switch'),null);
+});
+
+test('composer requires text allowance for classification even when an image credit exists',()=>{
+ mount('这张图帮我换成水彩');
+ act(()=>root.render(<Composer value="把这张照片改成水彩画" context={{hasImages:true,imageCount:1}} onChange={()=>{}} onSend={async()=>true} onStop={()=>{}} running={false} wallet={{...wallet,freeTokens:0,freeImages:1}} signedIn onOpenAccount={()=>{}}/>));
+ assert.equal(host.querySelector('[aria-label="发送"]').disabled,true);
+ assert.match(host.querySelector('.composer-billing-note').textContent,/免费 Token|充值/);
+});

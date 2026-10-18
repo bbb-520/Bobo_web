@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent } from 'react';
 import { gsap } from 'gsap';
 import './PillNav.css';
@@ -41,6 +41,7 @@ export default function PillNav({
   initialLoadAnimation = true,
 }: Props) {
   const resolvedPillTextColor = pillTextColor ?? baseColor;
+  const menuId = useId();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const circleRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const tlRefs = useRef<gsap.core.Timeline[]>([]);
@@ -60,6 +61,7 @@ export default function PillNav({
         const pill = circle.parentElement;
         const rect = pill.getBoundingClientRect();
         const { width: w, height: h } = rect;
+        if (!w || !h) return;
         const radius = ((w * w) / 4 + h * h) / (2 * h);
         const diameter = Math.ceil(2 * radius) + 2;
         const delta = Math.ceil(radius - Math.sqrt(Math.max(0, radius * radius - (w * w) / 4))) + 1;
@@ -92,6 +94,8 @@ export default function PillNav({
 
     layout();
     window.addEventListener('resize', layout);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(layout);
+    if (navItemsRef.current) observer?.observe(navItemsRef.current);
     document.fonts?.ready.then(layout).catch(() => {});
 
     const menu = mobileMenuRef.current;
@@ -112,6 +116,7 @@ export default function PillNav({
 
     return () => {
       window.removeEventListener('resize', layout);
+      observer?.disconnect();
       tlRefs.current.forEach((timeline) => timeline.kill());
       activeTweenRefs.current.forEach((tween) => tween.kill());
     };
@@ -230,7 +235,7 @@ export default function PillNav({
           onClick={toggleMobileMenu}
           aria-label={isMobileMenuOpen ? '关闭菜单' : '打开菜单'}
           aria-expanded={isMobileMenuOpen}
-          aria-controls="mobile-primary-menu"
+          aria-controls={menuId}
           ref={hamburgerRef}
         >
           <span className="hamburger-line" />
@@ -239,7 +244,7 @@ export default function PillNav({
       </nav>
 
       <div
-        id="mobile-primary-menu"
+        id={menuId}
         className="mobile-menu-popover mobile-only"
         ref={mobileMenuRef}
         style={cssVars}

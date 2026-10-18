@@ -19,6 +19,8 @@ function backend(override?) {
  globalThis.fetch=async(url,init={})=>{
   const path=String(url);calls.push({path,init});
   if(override){const result=await override(path,init,jobs);if(result)return result;}
+  if(path==='/api/chat/image-intent')return Response.json({intent:'DESCRIBE'});
+  if(path==='/api/billing/wallet')return Response.json({balanceMicros:1000000,reservedMicros:0,freeTokens:1000,freeImages:1,arrears:false,blocked:false,activeUsageId:null});
   if(path==='/api/image-assets/upload-policy')return Response.json({assetId:'a1',uploadUrl:'https://oss.test/upload',fields:{key:'source'}});
   if(path==='https://oss.test/upload'||path.endsWith('/complete'))return new Response(null,{status:204});
   if(path==='/api/image-jobs'&&init.method==='POST'){
@@ -143,4 +145,143 @@ test('accepted pending job resumes polling after refresh even if the conversatio
  mount();act(()=>state.send('a panda',undefined,'image'));await flush();await flush();assert.equal(state.conversations[0].messages.at(-1).imageRequest.state,'accepted');
  act(()=>root.unmount());root=null;outage=true;jobs[0].status='SUCCEEDED';mount();await flush();await flush();
  assert.equal(state.conversations[0].messages.at(-1).imageJobs[0].status,'SUCCEEDED');assert.equal(creates(calls).length,1);
+});
+
+for(const [prompt,intent] of [
+ ['这张图帮我换成水彩','REMIX'],['先描述这张图再改成水彩','REMIX'],
+ ['这张图是什么风格','DESCRIBE'],['分析下这个方案能不能改成线上','DESCRIBE'],
+ ['不要生成图片，只解释海报风格','DESCRIBE'],['教我如何把照片改成水彩','DESCRIBE'],
+ ['把这张照片做成一张复古海报','DESCRIBE'],
+] as const)test(`backend image intent controls dispatch: ${prompt} => ${intent}`,async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent}):undefined);
+ mount();act(()=>state.send(prompt,[image()],'chat'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);
+ assert.equal(creates(calls).length,intent!=='DESCRIBE'?1:0);
+ assert.equal(calls.filter(c=>c.path==='/api/agent-executions').length,intent==='DESCRIBE'?1:0);
+ if(intent!=='DESCRIBE')assert.equal(JSON.parse(creates(calls)[0].init.body).attachments[0].assetId,'a1');
+ assert.equal(state.conversations[0].messages.at(-1).mode,intent!=='DESCRIBE'?'image':'vision');
+});
+
+for(const verdict of ['WAIT_FOR_INSTRUCTION','GENERATE please',null])test(`uncertain image intent stops without another paid task: ${verdict}`,async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:verdict}):undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image()],'chat'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);
+ assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);
+ assert.equal(state.busy,null);assert.match(state.conversations[0].messages.at(-1).error,/明确/);
+});
+
+test('classification failure is not retried and never falls through to vision',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({message:'分类超时'},{status:503}):undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image()],'chat'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);assert.equal(creates(calls).length,0);
+ assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);assert.equal(state.busy,null);
+});
+
+for(const switchAccount of [false,true])test(`late classification is fenced after ${switchAccount?'account switch':'stop'}`,async()=>{
+ let release;const pending=new Promise(resolve=>release=resolve);
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?pending:undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image()],'chat'));await flush();
+ assert.ok(state.busy);assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);
+ act(()=>switchAccount?root.render(<Harness scope="second"/>):state.stop());
+ await act(async()=>release(Response.json({intent:'GENERATE'})));await flush();
+ assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);assert.equal(state.busy,null);
+});
+
+test('a follow-up edit classifies stored context and preserves its owned reference',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'REMIX'}):undefined);
+ const id='2fe09439-371d-418f-857e-1fb809058b40';
+ localStorage.setItem('travel-agent.conversations.v1.owner',JSON.stringify([{id,title:'photo',createdAt:1,updatedAt:1,messages:[],imageAttachments:[{assetId:'stored',fileName:'photo.png',mimeType:'image/png',fileSize:5}]}]));
+ localStorage.setItem('travel-agent.activeSessionId.v1.owner',id);
+ mount();await flush();act(()=>state.send('这张图帮我换成水彩'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);assert.equal(creates(calls).length,1);
+ assert.equal(JSON.parse(creates(calls)[0].init.body).attachments[0].assetId,'stored');
+});
+
+test('multiple image edit references stop before any image task',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'GENERATE'}):undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image(),image()]));await flush();await flush();
+ assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);
+ assert.match(state.conversations[0].messages.at(-1).error,/一张|1 张/);
+});
+
+test('a new text-to-image request does not inherit older references after classification',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'GENERATE'}):undefined);
+ const id='2fe09439-371d-418f-857e-1fb809058b40';
+ localStorage.setItem('travel-agent.conversations.v1.owner',JSON.stringify([{id,title:'photo',createdAt:1,updatedAt:1,messages:[],imageAttachments:[{assetId:'stored',fileName:'photo.png',mimeType:'image/png',fileSize:5}]}]));
+ localStorage.setItem('travel-agent.activeSessionId.v1.owner',id);
+ mount();await flush();act(()=>state.send('生成一张海边日落照片'));await flush();await flush();
+ assert.equal(creates(calls).length,1);assert.equal(JSON.parse(creates(calls)[0].init.body).attachments,undefined);
+});
+
+test('blocked wallet after classification prevents the next task',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'GENERATE'}):path==='/api/billing/wallet'?Response.json({balanceMicros:0,reservedMicros:0,freeTokens:0,freeImages:0,arrears:false,blocked:true,activeUsageId:'pending'}):undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image()]));await flush();await flush();
+ assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);assert.equal(state.busy,null);
+});
+
+test('image-only upload and explicit creation skip paid intent classification',async()=>{
+ const {calls}=backend();mount();act(()=>state.send('',[image()]));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,0);
+ act(()=>state.send('watercolor',[image()],'image'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,0);assert.equal(creates(calls).length,1);
+});
+
+test('classification timeout aborts once and a late response cannot start work',async()=>{
+ const original=globalThis.setTimeout;let expire,release;
+ const pending=new Promise(resolve=>release=resolve);
+ globalThis.setTimeout=((callback,delay,...args)=>delay===15000?(expire=callback,original(()=>{},60000)):original(callback,delay,...args)) as typeof setTimeout;
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?pending:undefined);
+ try {
+  mount();act(()=>state.send('这张图帮我换成水彩',[image()]));await flush();
+  assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,1);
+  act(()=>expire());
+  await act(async()=>release(Response.json({intent:'GENERATE'})));await flush();
+  assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);
+  assert.equal(state.busy,null);assert.match(state.conversations[0].messages.at(-1).error,/超时/);
+ }finally{globalThis.setTimeout=original;}
+});
+
+test('storage failure after classification prevents image submission',async()=>{
+ const original=window.Storage.prototype.setItem;
+ const {calls}=backend(path=>{
+  if(path==='/api/chat/image-intent') {
+   window.Storage.prototype.setItem=function(key,value){
+    if(String(key).startsWith('travel-agent.conversations.')&&value.includes('"imageRequest"'))throw new Error('quota');
+    return original.call(this,key,value);
+   };
+   return Response.json({intent:'GENERATE'});
+  }
+ });
+ try {
+  mount();act(()=>state.send('这张图帮我换成水彩',[image()]));await flush();await flush();
+  assert.equal(creates(calls).length,0);assert.equal(state.busy,null);
+ }finally{window.Storage.prototype.setItem=original;}
+});
+
+test('an uploaded auto-edit keeps the owned reference for the next image question',async()=>{
+ const {calls}=backend((path,init)=>path==='/api/chat/image-intent'?Response.json({intent:JSON.parse(init.body).question==='这张图帮我换成水彩'?'REMIX':'DESCRIBE'}):undefined);
+ mount();act(()=>state.send('这张图帮我换成水彩',[image()]));await flush();await flush();
+ act(()=>state.send('这张图是什么风格'));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,2);
+ const question=JSON.parse(calls.find(c=>c.path==='/api/agent-executions').init.body);
+ assert.equal(question.attachments[0].assetId,'a1');assert.equal(state.conversations[0].messages.at(-1).mode,'vision');
+});
+
+test('reload and retry after an unknown classification must classify again',async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'WAIT_FOR_INSTRUCTION'}):undefined);
+ mount();act(()=>state.send('把这张照片做成一张复古海报',[image()]));await flush();await flush();
+ const userId=state.conversations[0].messages[0].id;
+ act(()=>root.unmount());root=null;mount();await flush();await flush();
+ act(()=>state.retryAttachments(userId));await flush();await flush();
+ assert.equal(calls.filter(c=>c.path==='/api/chat/image-intent').length,2);
+ assert.equal(creates(calls).length,0);assert.equal(calls.some(c=>c.path==='/api/agent-executions'),false);
+});
+
+for(const prompt of ['改成水彩','把背景换成蓝色'])test(`semantic edit uses stored source without referent keywords: ${prompt}`,async()=>{
+ const {calls}=backend(path=>path==='/api/chat/image-intent'?Response.json({intent:'REMIX'}):undefined);
+ const id='2fe09439-371d-418f-857e-1fb809058b40';
+ localStorage.setItem('travel-agent.conversations.v1.owner',JSON.stringify([{id,title:'photo',createdAt:1,updatedAt:1,messages:[],imageAttachments:[{assetId:'stored',fileName:'photo.png',mimeType:'image/png',fileSize:5}]}]));
+ localStorage.setItem('travel-agent.activeSessionId.v1.owner',id);
+ mount();await flush();act(()=>state.send(prompt));await flush();await flush();
+ assert.equal(creates(calls).length,1);assert.equal(JSON.parse(creates(calls)[0].init.body).attachments[0].assetId,'stored');
 });

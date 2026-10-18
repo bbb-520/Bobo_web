@@ -1,0 +1,2 @@
+# The offline exporter verifies the catalog byte for byte on every platform.
+src/data/prompt-gallery.json text eol=lf

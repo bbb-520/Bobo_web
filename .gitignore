@@ -13,3 +13,5 @@ vite.config.ts.timestamp-*
 secrets/
 *.pem
 .docker-work/
+/tmp/
+/.migration/

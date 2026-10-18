@@ -28,6 +28,6 @@ test('empty remote index never deletes local history and aborted synchronization
 test('initial fetch merges against the latest local state rather than the state before the network wait',async()=>{
  let resolve:any;let local=[conv('a')];
  const remote={list:async()=>new Promise<any[]>(done=>resolve=done),get:async()=>{throw Error('unexpected');},put:async()=>{throw Error('unexpected');}};
- const sync=new ConversationSync(remote);const loading=sync.load(()=>local);local=[conv('new',7),...local];resolve([]);
+ const sync=new ConversationSync(remote);const loading=sync.load(()=>local);local=[conv('new',7),...local];await new Promise(done=>setTimeout(done,0));resolve([]);
  assert.deepEqual((await loading).map(c=>c.id),['new','a']);
 });

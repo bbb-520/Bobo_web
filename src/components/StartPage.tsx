@@ -10,6 +10,8 @@ interface Props {
   onStart: () => void;
   onOpenAbout: () => void;
   onOpenWorld: () => void;
+  onOpenPrompts?: () => void;
+  active?: boolean;
 }
 
 const SUBTITLES = [
@@ -25,7 +27,7 @@ const SUBTITLES = [
  * 入口页参考 summerWeb-temp：暖色编辑感画布、固定导航、壁纸叠层、
  * 居中 Hero 和轻量的副标题轮播。进入聊天仍使用原有 hash 路由。
  */
-export default function StartPage({ onStart, onOpenAbout, onOpenWorld }: Props) {
+export default function StartPage({ onStart, onOpenAbout, onOpenWorld, onOpenPrompts, active = true }: Props) {
   const [leaving, setLeaving] = useState(false);
   const [subtitleIndex, setSubtitleIndex] = useState(0);
   const [typedSubtitle, setTypedSubtitle] = useState('');
@@ -67,6 +69,7 @@ export default function StartPage({ onStart, onOpenAbout, onOpenWorld }: Props) 
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (!active || (event.target instanceof Element && event.target.closest('button,a,input,textarea,select'))) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       event.preventDefault();
       go();
@@ -97,6 +100,7 @@ export default function StartPage({ onStart, onOpenAbout, onOpenWorld }: Props) 
           logoAlt="bobo"
           items={[
             { label: 'Bobo’s World', href: '#world', onClick: onOpenWorld },
+            { label: '提示词', href: '#prompts', onClick: onOpenPrompts },
             { label: '关于bbb', href: '#about', onClick: onOpenAbout },
           ]}
           activeHref="#home"

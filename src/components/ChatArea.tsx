@@ -22,6 +22,7 @@ interface Props {
   onStop: () => void;
   onClear: () => void;
   onOpenSettings: () => void;
+  onOpenPrompts?: () => void;
   onOpenLogin: () => void;
   onGoHome: () => void;
   onOpenProfile: () => void;
@@ -43,6 +44,7 @@ export default function ChatArea({
   onStop,
   onClear,
   onOpenSettings,
+  onOpenPrompts,
   onOpenLogin,
   onGoHome,
   onOpenProfile,
@@ -102,6 +104,7 @@ export default function ChatArea({
           logoAlt="bobo"
           items={[
             { label: '首页', href: '#start', onClick: onGoHome },
+            { label: '提示词', href: '#prompts', onClick: onOpenPrompts },
             { label: '设置', href: '#settings', onClick: onOpenSettings },
             { label: user ? user.username : '登录', href: '#profile', onClick: user ? onOpenProfile : onOpenLogin },
           ]}
