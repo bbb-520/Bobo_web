@@ -10,7 +10,7 @@ import {
   fetchImageJob,
   uploadImageAsset,
 } from '../lib/api';
-import { ImageJobNotFoundError, reconcileImageJobs } from '../lib/imageJobPolling';
+import { ImageJobNotFoundError, preserveImageJobUrls, reconcileImageJobs } from '../lib/imageJobPolling';
 import { classifyImageIntent } from '../lib/imageIntent';
 import { confirmImageCreation, imageCreationApi } from '../lib/imageCreation';
 import { ApiError } from '../lib/http';
@@ -232,7 +232,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       storageKey:`travel-agent.sync-baselines.v1.${encodeURIComponent(scope)}`,
       onRecovered:change=>{
         if(!valid())return;
-        const recovered=applySyncRecovery(listRef.current,change);
+        const recovered=preserveImageJobUrls(listRef.current,applySyncRecovery(listRef.current,change));
         listRef.current=recovered;setConversations(recovered);
         try {saveConversations(recovered,scope);}catch(error){setSyncError(error instanceof Error?error.message:'本地记录保存失败');}
         if(activeRef.current===change.id&&change.remote.deleted){const next=change.copy?.id??recovered[0]?.id;activeRef.current=next??null;setActiveId(next??null);if(next)saveActiveSessionId(next,scope);}
@@ -244,10 +244,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       if(!valid())return;setHistoryLoading(true);setSyncError('');
       try {const latest=await sync.load(()=>listRef.current,{activeId:loadActiveSessionId(scope)});
         if(!valid())return;
-        const restored=latest.filter(c=>!removedConversations.current.has(c.id)).map(c=>({...c,messages:c.messages.map(m=>({
+        const restored=preserveImageJobUrls(listRef.current,latest.filter(c=>!removedConversations.current.has(c.id)).map(c=>({...c,messages:c.messages.map(m=>({
           ...m,...(m.status==='streaming'&&!m.execution?{status:'stopped' as const,endReason:'aborted' as const,finishedAt:m.finishedAt??Date.now()}:{}),
           ...(m.attachmentPreparation?.state==='preparing'?{attachmentPreparation:{...m.attachmentPreparation,state:'stopped' as const,error:'附件准备已中断，请重新选择未上传文件。'}}:{}),
-        }))}));
+        }))})));
         current.ready=true;listRef.current=restored;setConversations(restored);
         setHistoryHasMore(sync.hasMore);
         try {saveConversations(restored,scope);sync.checkpoint(loadConversations(scope));}catch(error){notifyRef.current(error instanceof Error?error.message:'本地记录保存失败','err');}
@@ -289,9 +289,10 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       if(cloud?.ready&&cloud.scope===ownerRef.current&&cloud.sync.hasMore) {
         const latest=await cloud.sync.loadMore(()=>listRef.current);
         if(epoch!==scopeEpoch.current||cloudRef.current!==cloud)return;
-        listRef.current=latest;setConversations(latest);setHistoryHasMore(cloud.sync.hasMore);
+        const restored=preserveImageJobUrls(listRef.current,latest);
+        listRef.current=restored;setConversations(restored);setHistoryHasMore(cloud.sync.hasMore);
         setHistoryLimit(limit=>limit+20);
-        saveConversations(latest,scope);cloud.sync.checkpoint(loadConversations(scope));
+        saveConversations(restored,scope);cloud.sync.checkpoint(loadConversations(scope));
         return;
       }
       if(epoch===scopeEpoch.current)setHistoryLimit(limit=>limit+20);

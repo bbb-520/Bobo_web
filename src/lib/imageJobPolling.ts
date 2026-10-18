@@ -50,3 +50,19 @@ export function reconcileImageJobs(conversation: Conversation, jobs: ImageJobRef
     }),
   };
 }
+
+
+/** Cloud snapshots omit signed URLs; retain only the same successful receipt in memory. */
+export function preserveImageJobUrls(current:Conversation[],incoming:Conversation[]):Conversation[] {
+  const key=(conversationId:string,messageId:string,job:ImageJobRef)=>JSON.stringify([conversationId,messageId,job.jobId,job.requestId??null]);
+  const urls=new Map<string,string>();
+  for(const conversation of current)for(const message of conversation.messages)for(const job of message.imageJobs??[]) {
+    if(job.status==='SUCCEEDED'&&job.imageUrl)urls.set(key(conversation.id,message.id,job),job.imageUrl);
+  }
+  return incoming.map(conversation=>({...conversation,messages:conversation.messages.map(message=>({...message,
+    imageJobs:message.imageJobs?.map(job=>{
+      const url=job.status==='SUCCEEDED'&&!job.imageUrl?urls.get(key(conversation.id,message.id,job)):undefined;
+      return url?{...job,imageUrl:url}:job;
+    }),
+  }))}));
+}

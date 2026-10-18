@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ImageJobRef } from '../types';
 import { apiUrl, fetchImageJob, publishBoboItem } from '../lib/api';
 import { ImageJobNotFoundError } from '../lib/imageJobPolling';
@@ -13,28 +13,40 @@ export function ImageJobCard({ job, baseUrl, signedIn, onManage, onRemix }: {
   onRemix?: (imageUrl: string) => void;
 }) {
   const running = job.status === 'QUEUED' || job.status === 'PROCESSING';
-  const [imageUrl, setImageUrl] = useState(job.imageUrl ?? '');
+  const [imageUrl, setImageUrl] = useState(job.status==='SUCCEEDED'?job.imageUrl??'':'');
   const [publishOpen, setPublishOpen] = useState(false);
   const [caption, setCaption] = useState('');
   const [anonymous, setAnonymous] = useState(true);
   const [publishBusy, setPublishBusy] = useState(false);
   const [published, setPublished] = useState(false);
   const [error, setError] = useState('');
-  const [refreshAttempted, setRefreshAttempted] = useState(false);
+  const refreshRef=useRef<(()=>Promise<void>)|null>(null);
 
-  useEffect(() => { setImageUrl(job.imageUrl ?? ''); setRefreshAttempted(false); }, [job.imageUrl]);
+  useEffect(()=>{
+    const controller=new AbortController();let attempted=false,pending=false;
+    const unavailable='图片暂时无法读取，请稍后刷新会话。';
+    const refresh=async()=>{
+      if(controller.signal.aborted)return;
+      if(attempted){if(!pending)setError(unavailable);return;}
+      attempted=true;pending=true;
+      try {
+        const refreshed=await fetchImageJob(job.jobId,baseUrl,controller.signal);
+        if(controller.signal.aborted)return;
+        if(refreshed?.jobId===job.jobId&&refreshed.status==='SUCCEEDED'&&refreshed.imageUrl
+          &&(!job.requestId||!refreshed.requestId||job.requestId===refreshed.requestId)) {
+          setImageUrl(refreshed.imageUrl);setError('');
+        } else setError(unavailable);
+      } catch(cause) {
+        if(!controller.signal.aborted)setError(cause instanceof ImageJobNotFoundError?'图片任务已失效，请重新上传图片。':unavailable);
+      } finally {pending=false;}
+    };
+    refreshRef.current=refresh;
+    setImageUrl(job.status==='SUCCEEDED'?job.imageUrl??'':'');setError('');
+    if(job.status==='SUCCEEDED'&&!job.imageUrl)void refresh();
+    return()=>{controller.abort();if(refreshRef.current===refresh)refreshRef.current=null;};
+  },[job.jobId,job.requestId,job.status,job.imageUrl,baseUrl]);
 
-  const refreshImageUrl = async () => {
-    if (refreshAttempted) { setError('图片暂时无法读取，请稍后刷新会话。'); return; }
-    setRefreshAttempted(true);
-    try {
-      const refreshed = await fetchImageJob(job.jobId, baseUrl);
-      if (refreshed?.imageUrl) setImageUrl(refreshed.imageUrl);
-      else setError('图片暂时无法读取，请稍后刷新会话。');
-    } catch (cause) {
-      setError(cause instanceof ImageJobNotFoundError ? '图片任务已失效，请重新上传图片。' : '图片暂时无法读取，请稍后刷新会话。');
-    }
-  };
+  const refreshImageUrl=()=>refreshRef.current?.();
 
   const downloadImage = () => {
     if (!imageUrl || job.status !== 'SUCCEEDED') return;
@@ -56,7 +68,7 @@ export function ImageJobCard({ job, baseUrl, signedIn, onManage, onRemix }: {
   };
 
   if (running) return <div className="image-job-pending" aria-live="polite"><span className="image-job-scan" aria-hidden="true" /><div><strong>正在生成一张图片</strong><p>完成后结果会显示在这里。</p></div></div>;
-  if (!imageUrl) return <div className="image-job-pending" role="alert"><div><strong>图片生成未完成</strong><p>{job.error || '请稍后重试。'}</p></div></div>;
+  if (!imageUrl) return <div className="image-job-pending" role="alert"><div><strong>{job.status==='SUCCEEDED'?(error?'图片暂时无法读取':'正在恢复图片'):'图片生成未完成'}</strong><p>{error || job.error || (job.status==='SUCCEEDED'?'正在获取图片，请稍候。':'请稍后重试。')}</p></div></div>;
 
   return (
     <section className="image-job-card" aria-label="生成图片">
