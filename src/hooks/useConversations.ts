@@ -472,8 +472,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           const asset=await uploadImageAsset(source,settingsRef.current.baseUrl,controller.signal);
           if(!valid())return;
           request={...request,attachments:[imageReference(asset)],state:'submitting'};
-          mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,messages:c.messages.map(m=>m.id===userId?{...m,attachments:[{...asset,previewUrl:m.attachments?.[0]?.previewUrl}]}:m)}));
-          patch({imageRequest:request});
+          mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,imageAttachments:request.attachments,messages:c.messages.map(m=>m.id===userId?{...m,attachments:[{...asset,previewUrl:m.attachments?.[0]?.previewUrl}]}:m.id===msgId?{...m,imageRequest:request}:m)}),true);
         }
         for(let attempt=0;attempt<3&&valid();attempt++) {
           try {
@@ -507,7 +506,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       } catch(cause) {
         if(!valid())return;
         const uploadFailed=request.state==='uploading';
-        const definite=uploadFailed||cause instanceof ApiError&&[400,401,402,403,404,409,413,422].includes(cause.status);
+        const definite=uploadFailed||cause instanceof StoragePersistenceError||cause instanceof ApiError&&[400,401,402,403,404,409,413,422].includes(cause.status);
         const message=uploadFailed?'参考图片上传失败，请重新选择图片并发送。':definite&&cause instanceof Error?cause.message:'图片任务状态暂时无法确认，刷新页面将继续核对同一请求，请勿重复提交。';
         patch({status:definite?'error':'stopped',imageRequest:{...request,state:definite?'failed':'submitting'},error:message,finishedAt:Date.now()});notifyRef.current(message,'err');
       } finally {
