@@ -25,7 +25,7 @@ import {
   uid,
 } from '../lib/storage';
 import type { PushToast } from './useToasts';
-import { executionApi, ExecutionApiError, isExecutionActive, type ExecutionView } from '../api/executions';
+import { executionApi, ExecutionApiError, isExecutionActive, mergeExecutionSnapshot, type ExecutionView } from '../api/executions';
 import { loadExecutionRecovery, saveExecutionRecovery, type ExecutionRecovery } from '../lib/executionRecovery';
 import { cancellableDelay, observeExecution, reconnectDelay } from '../lib/executionRunner';
 import { documentApi, uploadDocument, type DocumentConversation, type DocumentView } from '../api/documents';
@@ -258,7 +258,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(!view||!isExecutionActive(view)||executionObservers.current.has(message.id))continue;
           const entry:ExecutionRecovery={convId:conversation.id,msgId:message.id,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,conversationId:conversation.id}};
           if(!recoveryRef.current.some(item=>item.msgId===message.id))recoveryRef.current.push(entry);
-          observeDurable(entry);
+          restoreDurable(entry);
         }
       }catch(error){if(valid()){const message=error instanceof Error?error.message:'连接失败';setSyncError(message);notifyRef.current(`会话同步暂不可用，本地记录仍保留：${message}`,'err');}}
       finally{if(valid())setHistoryLoading(false);}
@@ -315,7 +315,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       if(!view||!isExecutionActive(view)||executionObservers.current.has(message.id))continue;
       const entry:ExecutionRecovery={convId:activeId,msgId:message.id,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,conversationId:activeId}};
       if(!recoveryRef.current.some(item=>item.msgId===message.id))recoveryRef.current.push(entry);
-      observeDurable(entry);
+      restoreDurable(entry);
     }
   },[activeId,scope]);
 
@@ -526,10 +526,29 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
   const persistRecovery=(required=false)=>{
     try {saveExecutionRecovery(ownerRef.current,recoveryRef.current);}catch(cause){notifyRef.current(cause instanceof Error?cause.message:'保存恢复信息失败','err');if(required)throw cause;}
   };
-  const patchExecution=(entry:ExecutionRecovery,view?:ExecutionView,connection='')=>{
-    mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,updatedAt:Date.now(),messages:c.messages.map(m=>m.id!==entry.msgId?m:{
-      ...m,...(view?{execution:view,content:view.answer,status:isExecutionActive(view)?'streaming' as const:view.status==='FAILED'?'error' as const:view.status==='COMPLETED'?'done' as const:'stopped' as const,error:view.error??undefined,finishedAt:isExecutionActive(view)?undefined:(m.finishedAt ?? Date.now())}:{}),executionConnection:connection,
-    })}));
+  const registerRecovery=(entry:ExecutionRecovery)=>{
+    if(recoveryRef.current.some(item=>item.convId===entry.convId&&item.msgId===entry.msgId))throw new Error('原请求受理状态仍待核对，已暂停重复提交，请先恢复原任务状态。');
+    const next=[...recoveryRef.current,entry];
+    saveExecutionRecovery(ownerRef.current,next);
+    recoveryRef.current=next;
+  };
+  const executionMessageMatches=(entry:ExecutionRecovery,message:ChatMsg,view?:ExecutionView)=>message.id===entry.msgId&&(!message.execution||(
+    message.execution.executionId===(view?.executionId??entry.executionId??message.execution.executionId)&&
+    message.execution.requestId===(view?.requestId??entry.request.requestId)
+  ));
+  const patchExecution=(entry:ExecutionRecovery,view?:ExecutionView,connection='',required=false)=>{
+    mutateExecutionConversations(items=>items.map(c=>{
+      if(c.id!==entry.convId)return c;
+      let changed=false;
+      const messages=c.messages.map(m=>{
+        if(!executionMessageMatches(entry,m,view))return m;
+        const snapshot=view&&m.execution?mergeExecutionSnapshot(m.execution,view):view;
+        if(view&&m.execution&&snapshot===m.execution)return m;
+        changed=true;
+        return {...m,...(snapshot?{execution:snapshot,content:snapshot.answer,status:isExecutionActive(snapshot)?'streaming' as const:snapshot.status==='FAILED'?'error' as const:snapshot.status==='COMPLETED'?'done' as const:'stopped' as const,error:snapshot.error??undefined,finishedAt:isExecutionActive(snapshot)?undefined:(m.finishedAt??Date.now())}:{}),executionConnection:connection};
+      });
+      return changed?{...c,updatedAt:Date.now(),messages}:c;
+    }),required);
   };
   const observeDurable=(entry:ExecutionRecovery,initial?:ExecutionView,recover=true)=>{
     if(executionObservers.current.has(entry.msgId))return;
@@ -541,7 +560,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
       controller.abort();
       if(executionObservers.current.get(entry.msgId)===controller)executionObservers.current.delete(entry.msgId);
       patchExecution(entry,undefined,message);
-      mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped',finishedAt:m.finishedAt??Date.now()})}));
+      mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>!executionMessageMatches(entry,m)?m:{...m,status:'stopped',finishedAt:m.finishedAt??Date.now()})}));
       if(busyRef.current?.msgId===entry.msgId){busyRef.current=null;setBusy(null);activeRunRef.current=null;}
     };
     let observationTimer=0;
@@ -553,7 +572,12 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     const publish=(view:ExecutionView)=>{
       if(!valid())return;
       touchObservation();
-      entry.executionId=view.executionId;entry.lastSeq=view.lastSeq;persistRecovery();patchExecution(entry,view);
+      const message=listRef.current.find(c=>c.id===entry.convId)?.messages.find(m=>m.id===entry.msgId);
+      entry.executionId=view.executionId;entry.lastSeq=Math.max(entry.lastSeq,view.lastSeq);
+      if(!message||!executionMessageMatches(entry,message,view)) {
+        entry.receipt=view;entry.lookupOnly=true;persistRecovery();controller.abort();return;
+      }
+      persistRecovery();patchExecution(entry,view);
       if(isExecutionActive(view)) {
         busyRef.current={convId:entry.convId,msgId:entry.msgId};setBusy(busyRef.current);
       }
@@ -578,11 +602,11 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
               try {view=await api.find(entry.request.requestId,controller.signal);}
               catch(error){
                 if(error instanceof ExecutionApiError&&error.status===404) {
-                  if(entry.stopRequested)throw new ExecutionApiError('已停止等待，未找到已受理请求，未重新提交。',404);
+                  if(entry.stopRequested||entry.lookupOnly)throw new ExecutionApiError('已停止等待，未找到已受理请求，未重新提交。',404);
                   view=await api.create(entry.request,controller.signal);
                 } else throw error;
               }
-            } else {recover=true;view=await api.create(entry.request,controller.signal);}
+            } else {recover=true;view=entry.lookupOnly?await api.find(entry.request.requestId,controller.signal):await api.create(entry.request,controller.signal);}
           } catch(error) {
             if(!valid())return;
             if(error instanceof ExecutionApiError&&[400,401,402,403,404,409,413,422].includes(error.status))throw error;
@@ -598,7 +622,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           }
           return;
         }
-        if(entry.resumeRequest) {view=await api.resume(view.executionId,entry.resumeRequest,controller.signal);entry.resumeRequest=undefined;}
+        if(entry.resumeRequest&&!entry.lookupOnly) {view=await api.resume(view.executionId,entry.resumeRequest,controller.signal);entry.resumeRequest=undefined;}
         publish(view);
         if(entry.stopRequested&&isExecutionActive(view)) {
           // A stop intent survives reload and ambiguous HTTP results; repeating stop is safe.
@@ -609,12 +633,24 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
           if(entry.stopRequested&&isExecutionActive(current))return api.stop(id,signal);
           return current;
         }},signal:controller.signal,onSnapshot:publish,onConnection:message=>{if(valid())patchExecution(entry,undefined,message);}});
-        if(valid()&&final&&!isExecutionActive(final)) {recoveryRef.current=recoveryRef.current.filter(item=>item.msgId!==entry.msgId);persistRecovery();}
+        if(valid()&&final&&!isExecutionActive(final)&&!(entry.lookupOnly&&entry.resumeRequest)) {
+          // Cloud loading can replace the message while observeExecution returns.
+          const message=listRef.current.find(c=>c.id===entry.convId)?.messages.find(m=>m.id===entry.msgId);
+          if(!message||final.requestId!==entry.request.requestId||message.execution&&(message.execution.executionId!==final.executionId||message.execution.requestId!==final.requestId)) {
+            entry.receipt=final;persistRecovery();return;
+          }
+          const receipt=message.execution?mergeExecutionSnapshot(message.execution,final):final;
+          if(isExecutionActive(receipt)){entry.receipt=receipt;entry.lastSeq=Math.max(entry.lastSeq,receipt.lastSeq);persistRecovery();return;}
+          // Reapply and durably save the receipt in this synchronous section before retirement.
+          patchExecution(entry,receipt,'',true);
+          const next=recoveryRef.current.filter(item=>!(item.convId===entry.convId&&item.msgId===entry.msgId&&item.request.requestId===entry.request.requestId));
+          saveExecutionRecovery(ownerRef.current,next);recoveryRef.current=next;
+        }
       } catch(error) {
         if(valid()) {
           const message=error instanceof Error?error.message:'执行状态暂时无法读取';
           patchExecution(entry,undefined,message);notifyRef.current(message,'err');
-          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,status:'stopped',finishedAt:m.finishedAt ?? Date.now()})}));
+          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>!executionMessageMatches(entry,m)?m:{...m,status:'stopped',finishedAt:m.finishedAt ?? Date.now()})}));
           // Keep the original request ID for uncertain create/resume outcomes.
         }
       } finally {
@@ -627,11 +663,69 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     })();
   };
 
+  const restoreDurable=(entry:ExecutionRecovery)=>{
+    if(executionObservers.current.has(entry.msgId))return;
+    let entries=recoveryRef.current.filter(item=>item.convId===entry.convId&&item.msgId===entry.msgId);
+    if(!entries.some(item=>item.request.requestId===entry.request.requestId)) {
+      recoveryRef.current=[...recoveryRef.current,entry];entries=[...entries,entry];
+    }
+    const message=listRef.current.find(c=>c.id===entry.convId)?.messages.find(m=>m.id===entry.msgId);
+    const known=message?.execution;
+    if(entries.some(item=>item.lookupOnly)&&known&&!entries.some(item=>item.request.requestId===known.requestId)) {
+      const accepted:ExecutionRecovery={convId:entry.convId,msgId:entry.msgId,lastSeq:known.lastSeq,executionId:known.executionId,
+        request:{requestId:known.requestId,type:known.type,question:known.question,conversationId:entry.convId},lookupOnly:true,receipt:known};
+      recoveryRef.current=[...recoveryRef.current,accepted];entries.push(accepted);
+    }
+    if(entries.length===1&&!entries[0].lookupOnly){observeDurable(entries[0]);return;}
+    entries.forEach(item=>{item.lookupOnly=true;});persistRecovery();
+    const epoch=scopeEpoch.current,controller=new AbortController(),api=executionApi(settingsRef.current.baseUrl);
+    executionObservers.current.set(entry.msgId,controller);
+    const valid=()=>epoch===scopeEpoch.current&&!controller.signal.aborted&&listRef.current.some(c=>c.id===entry.convId&&c.messages.some(m=>m.id===entry.msgId));
+    void(async()=>{
+      const accepted:{entry:ExecutionRecovery;view:ExecutionView}[]=[];let uncertain=false;
+      try {
+        for(const candidate of entries) {
+          try {
+            const view=await api.find(candidate.request.requestId,controller.signal);
+            if(!valid())return;
+            if(view.requestId!==candidate.request.requestId||typeof view.executionId!=='string')throw new Error('恢复回执与原请求不匹配');
+            candidate.executionId=view.executionId;candidate.lastSeq=Math.max(candidate.lastSeq,view.lastSeq);candidate.receipt=view;
+            const found={entry:candidate,view};accepted.push(found);
+            if(candidate.stopRequested&&isExecutionActive(view)) {
+              const stopped=await api.stop(view.executionId,controller.signal);
+              if(!valid())return;
+              if(stopped.requestId!==candidate.request.requestId||stopped.executionId!==view.executionId)throw new Error('停止回执与原请求不匹配');
+              candidate.lastSeq=Math.max(candidate.lastSeq,stopped.lastSeq);candidate.receipt=stopped;found.view=stopped;
+            }
+          } catch(error) {
+            if(!valid())return;
+            if(!(error instanceof ExecutionApiError&&error.status===404))uncertain=true;
+          }
+        }
+        if(!valid())return;
+        persistRecovery();
+        const current=listRef.current.find(c=>c.id===entry.convId)?.messages.find(m=>m.id===entry.msgId)?.execution;
+        const selected=accepted.find(item=>current&&item.view.executionId===current.executionId&&item.view.requestId===current.requestId)
+          ??(!uncertain&&accepted.length===1&&!current?accepted[0]:undefined);
+        if(!selected) {
+          const warning=accepted.length>1?'发现多个已受理任务，全部回执已保留，已暂停自动恢复和补建，请核对后再操作。':'原请求受理状态仍待核对，记录已保留；未重新提交，请稍后刷新核对。';
+          mutateExecutionConversations(items=>items.map(c=>c.id!==entry.convId?c:{...c,messages:c.messages.map(m=>m.id!==entry.msgId?m:{...m,error:warning,executionConnection:undefined,...(!m.execution?{status:'stopped',finishedAt:m.finishedAt??Date.now()}: {})})}));
+          notifyRef.current(warning,'err');return;
+        }
+        if(accepted.length>1||uncertain)notifyRef.current('其他重复请求的记录和回执已保留，未创建新任务，请勿重复发送。','err');
+        if(executionObservers.current.get(entry.msgId)===controller)executionObservers.current.delete(entry.msgId);
+        observeDurable(selected.entry,selected.view);
+      } finally {
+        if(executionObservers.current.get(entry.msgId)===controller)executionObservers.current.delete(entry.msgId);
+      }
+    })();
+  };
+
   useEffect(()=>{
     if(scope!==ownerRef.current)return;
     recoveryRef.current=loadExecutionRecovery(scope);
     recoveryRef.current.forEach(entry=>{
-      if(listRef.current.some(c=>c.id===entry.convId&&c.messages.some(m=>m.id===entry.msgId)))observeDurable(entry);
+      if(listRef.current.some(c=>c.id===entry.convId&&c.messages.some(m=>m.id===entry.msgId)))restoreDurable(entry);
     });
     // Restoring subscribes to durable work; cleanup must never call /stop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -648,19 +742,23 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
     mutateExecutionConversations(items=>items.some(c=>c.id===next.id)?items.map(c=>c.id===next.id?next:c):[next,...items],true);
     const scoped=route.useDocuments?conv.documentConversationId:undefined;
     const entry:ExecutionRecovery={convId:next.id,msgId:assistant.id,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:text,...(route.useImages&&conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(scoped?{documentConversationId:scoped}:{conversationId:conv.id})}};
-    recoveryRef.current.push(entry);try{persistRecovery(true);}catch(cause){recoveryRef.current=recoveryRef.current.filter(item=>item!==entry);throw cause;}observeDurable(entry,undefined,false);
+    registerRecovery(entry);observeDurable(entry,undefined,false);
   };
 
   const resumeExecution=(msgId:string,instruction?:string)=>{
     if(busyRef.current)return;
+    if(executionObservers.current.has(msgId)){notifyRef.current('正在核对原请求状态，请稍后重试。','err');return;}
     const conv=listRef.current.find(c=>c.messages.some(m=>m.id===msgId));const message=conv?.messages.find(m=>m.id===msgId);const view=message?.execution;
-    let entry=recoveryRef.current.find(item=>item.msgId===msgId);
+    const candidates=recoveryRef.current.filter(item=>item.convId===conv?.id&&item.msgId===msgId);
+    let entry=view?candidates.find(item=>item.request.requestId===view.requestId):candidates[0];
     if(!entry&&conv&&view)entry={convId:conv.id,msgId,executionId:view.executionId,lastSeq:view.lastSeq,request:{requestId:view.requestId,type:view.type,question:view.question,...(conv.imageAttachments?.length?{attachments:conv.imageAttachments.map(imageReference)}:{}),...(conv.documentConversationId?{documentConversationId:conv.documentConversationId}:{conversationId:conv.id})}};
     if(!entry)return;
-    entry.stopRequested=false;
-    if(view&&!isExecutionActive(view))entry.resumeRequest??={requestId:uid(),expectedVersion:view.version,additionalRounds:4,...(instruction?.trim()?{instruction:instruction.trim()}: {})};
-    if(!recoveryRef.current.some(item=>item.msgId===msgId))recoveryRef.current.push(entry);
-    persistRecovery();observeDurable(entry,view);
+    if(entry.lookupOnly&&!view){notifyRef.current('原请求尚未唯一确认，已暂停补建，请先核对任务状态。','err');return;}
+    const nextEntry={...entry,stopRequested:false,lookupOnly:false};
+    if(view&&!isExecutionActive(view))nextEntry.resumeRequest??={requestId:uid(),expectedVersion:view.version,additionalRounds:4,...(instruction?.trim()?{instruction:instruction.trim()}: {})};
+    const next=[...recoveryRef.current.filter(item=>item!==entry),nextEntry];
+    try {saveExecutionRecovery(ownerRef.current,next);}catch(error){notifyRef.current(error instanceof Error?error.message:'保存恢复信息失败','err');return;}
+    recoveryRef.current=next;observeDurable(nextEntry,view);
   };
 
   const setDocumentContext=(context:DocumentConversation|null)=>{
@@ -803,7 +901,7 @@ export function useConversations({ settings, accountScope = 'guest', notify, ope
         mutateExecutionConversations(items=>items.map(c=>c.id!==convId?c:{...c,...(context?{documentConversationId:context.conversationId,documentIds:context.documentIds,indexVersions:context.indexVersions}:{}),imageAttachments:refs,messages:c.messages.map(m=>m.id===userId?{...m,attachmentPreparation:undefined}:m.id===assistantId?{...m,mode:route.mode,automaticMode:route.automatic,status:'streaming',error:undefined,executionConnection:'正在提交…'}:m)}));
         const scoped=context?.conversationId??(route.useDocuments?conversation.documentConversationId:undefined);
         const entry:ExecutionRecovery={convId,msgId:assistantId,lastSeq:0,request:{requestId:uid(),type:scoped?'DOCUMENT_QA':'CHAT',question:current.content,...(scoped?{documentConversationId:scoped}:{conversationId:convId}),...(refs?.length?{attachments:refs.map(imageReference)}:{})}};
-        saveConversations(listRef.current,ownerRef.current);recoveryRef.current.push(entry);persistRecovery(true);pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
+        saveConversations(listRef.current,ownerRef.current);registerRecovery(entry);pendingFilesRef.current.delete(userId);transferred=true;observeDurable(entry,undefined,false);
       } catch(cause) {
         if(valid()){const message=cause instanceof Error?cause.message:'附件准备失败，请重试';failed(message);notifyRef.current(message,'err');}
       } finally {
